@@ -118,6 +118,19 @@ def _load_mappings() -> dict[int, str]:
     print(f"Loaded {len(mp)} mappings.")
     return mp
 
+def _ws(name: str) -> gspread.Worksheet:
+    return workbook.worksheet(name)
+
+def _today_la() -> date:
+    return datetime.now(TZ_LA).date()
+
+def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
+    if DRY_RUN:
+        print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
+        return
+    ws.update_cell(row, col, "TRUE" if value else "FALSE")
+
+
 def _find_row_by_exact_label(ws: gspread.Worksheet, sheet_label: str) -> int | None:
     """Find row in column A whose value equals sheet_label (trim, case-sensitive)."""
     colA = ws.col_values(1)
@@ -141,6 +154,40 @@ def _normalize_label(s: str) -> str:
     s = s.replace(".", "")
     s = re.sub(r"\s+", " ", s)
     return s.upper()
+
+def _split_roster(roster_cell: str) -> list[str]:
+    # "A, B, C" -> ["A", "B", "C"] normalized
+    if not roster_cell:
+        return []
+    parts = [p.strip() for p in roster_cell.split(",")]
+    return [_normalize_label(p) for p in parts if p.strip()]
+
+def _load_groups() -> list[dict]:
+    """
+    Reads Groups tab:
+      Col A: Group label (Group 1, Group 2...)
+      Col B: roster (comma-separated names)
+    Returns list of {row, group_label, members_norm}
+    """
+    ws = _ws(os.getenv("TAB_GROUPS", "Groups"))
+    values = ws.get_all_values()
+    out = []
+    # row 1 is header; start at row 2
+    for i, r in enumerate(values[1:], start=2):
+        group_label = (r[0] or "").strip() if len(r) > 0 else ""
+        roster = (r[1] or "").strip() if len(r) > 1 else ""
+        if not group_label:
+            continue
+        members_norm = _split_roster(roster)
+        out.append({"row": i, "group_label": group_label, "members_norm": members_norm})
+    return out
+
+def _find_group_for_member(groups: list[dict], member_sheet_name: str) -> dict | None:
+    target = _normalize_label(member_sheet_name)
+    for g in groups:
+        if target in g["members_norm"]:
+            return g
+    return None
 
 def _get_row_map(ws) -> dict[str, int]:
     """Build once per worksheet: map of both exact and normalized labels -> row index."""
@@ -335,6 +382,107 @@ async def run_dbr_once():
                 )
             except Exception as e:
                 print(f"Failed to send log message: {e}")
+
+TRACK_MESSAGE_ID = int(os.getenv("TRACK_MESSAGE_ID", "0") or "0")
+TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
+REQUIRE_AUTHOR_ID = int(os.getenv("REQUIRE_AUTHOR_ID", "0") or "0")
+
+TAB_INDIVIDUALS = os.getenv("TAB_INDIVIDUALS", "Individuals")
+TAB_GROUPS = os.getenv("TAB_GROUPS", "Groups")
+TAB_MAPPING = os.getenv("TAB_MAPPING", "Member Mapping")
+
+_processed = set()  # simple in-memory de-dupe
+
+def _emoji_matches(reaction_emoji) -> bool:
+    # Handles unicode emoji and custom emoji names
+    try:
+        name = reaction_emoji.name  # discord.PartialEmoji
+    except Exception:
+        name = str(reaction_emoji)
+    return str(name) == TRACK_EMOJI
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    """
+    Uses raw events so we don't miss events when messages aren't cached.
+    """
+    try:
+        if payload.user_id is None:
+            return
+        if payload.user_id == bot.user.id:
+            return
+        if TRACK_MESSAGE_ID and payload.message_id != TRACK_MESSAGE_ID:
+            return
+        if not _emoji_matches(payload.emoji):
+            return
+
+        # de-dupe
+        today = _today_la()
+        dedupe_key = (payload.message_id, payload.user_id, str(payload.emoji), today.isoformat())
+        if dedupe_key in _processed:
+            return
+        _processed.add(dedupe_key)
+
+        channel = bot.get_channel(payload.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(payload.channel_id)
+
+        msg = await channel.fetch_message(payload.message_id)
+
+        if REQUIRE_AUTHOR_ID and msg.author and msg.author.id != REQUIRE_AUTHOR_ID:
+            return
+
+        # Load mappings each event OR cache; start simple:
+        mappings = _load_mappings()  # {user_id:int -> sheet_name:str}
+        sheet_name = mappings.get(int(payload.user_id))
+        if not sheet_name:
+            print(f"[SKIP] user_id {payload.user_id} not in Member Mapping")
+            return
+
+        ws_ind = _ws(TAB_INDIVIDUALS)
+        ws_grp = _ws(TAB_GROUPS)
+
+        col_ind = _find_date_column(ws_ind, today)
+        col_grp = _find_date_column(ws_grp, today)
+
+        if not col_ind or not col_grp:
+            print(f"[ERR] date column not found for {today} (check header row formatting)")
+            return
+
+        row_ind = _find_row_by_exact_label(ws_ind, sheet_name)
+        if not row_ind:
+            print(f"[ERR] could not find row for '{sheet_name}' in Individuals col A")
+            return
+
+        # 1) Set Individuals checkbox TRUE
+        _set_checkbox(ws_ind, row_ind, col_ind, True)
+
+        # 2) Group recompute
+        groups = _load_groups()
+        g = _find_group_for_member(groups, sheet_name)
+        if not g:
+            print(f"[WARN] no group found containing '{sheet_name}' (Individuals updated only)")
+            return
+
+        # Check every member in group for today's checkbox
+        all_true = True
+        row_map = _get_row_map(ws_ind)  # cached colA map
+        for member_norm in g["members_norm"]:
+            r = row_map.get(member_norm)
+            if not r:
+                all_true = False
+                break
+            val = ws_ind.cell(r, col_ind).value
+            if str(val).strip().upper() != "TRUE":
+                all_true = False
+                break
+
+        _set_checkbox(ws_grp, g["row"], col_grp, all_true)
+        print(f"[OK] {sheet_name} marked TRUE; {g['group_label']} complete={all_true}")
+
+    except Exception as e:
+        print("[ERR] on_raw_reaction_add:", repr(e))
+
 
 
 
