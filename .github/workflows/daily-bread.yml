@@ -1,0 +1,121 @@
+name: Daily Bread Update
+
+on:
+  schedule:
+    # ~2:00 PM Los Angeles time (cover PDT/PST)
+    - cron: '0 21 * * *'   # 2:00 PM PDT  (UTC-7)
+    - cron: '0 22 * * *'   # 2:00 PM PST  (UTC-8)
+    # ~7:00 PM Los Angeles time
+    - cron: '0 2 * * *'    # 7:00 PM PDT  (02:00 UTC next day)
+    - cron: '0 3 * * *'    # 7:00 PM PST  (03:00 UTC next day)
+    # ~11:20 PM Los Angeles time
+    - cron: '20 6 * * *'   # 11:20 PM PDT (06:20 UTC next day)
+    - cron: '20 7 * * *'   # 11:20 PM PST (07:20 UTC next day)
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: America/Los_Angeles
+      RUN_ONCE: '1'
+      DRY_RUN: '0'
+      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+      SHEET_NAME: ${{ secrets.SHEET_NAME }}
+      DBR_CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      # Decide which window we’re in (PT) and assign a tag. If no window, skip later steps.
+      - name: Determine check label (Pacific)
+        id: label
+        run: |
+          EVENT="${{ github.event_name }}"
+          HM=$(TZ=America/Los_Angeles date +%H:%M)
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # Manual run: always execute, but mark as manual so we can suppress webhooks
+            TAG="Manual/Ad-hoc"
+          else
+            # Scheduled runs: only run during approved windows
+            case "$HM" in
+              14:* ) TAG="1st Check" ;;     # ~2:00 PM PT window (adjust to your windows)
+              19:* ) TAG="2nd Check" ;;     # ~7:00 PM PT window
+              23:2*|23:3*|23:4* ) TAG="3rd Check" ;;  # ~11:20 PM PT window
+              * )
+                echo "Outside approved windows ($HM); exiting without work."
+                echo "tag=SKIP" >> "$GITHUB_OUTPUT"
+                exit 78
+                ;;
+            esac
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: ${{ steps.label.outputs.tag != 'Skipped' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: ${{ steps.label.outputs.tag != 'Skipped' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Daily Bread update
+        if: ${{ steps.label.outputs.tag != 'Skipped' }}
+        run: |
+          python main.py | tee run.log
+
+      - name: Parse counts from output
+        if: ${{ steps.label.outputs.tag != 'Skipped' }}
+        id: parse
+        shell: bash
+        run: |
+          TODAY=$(grep -Eo 'SUMMARY: today=[0-9]+' run.log | sed 's/.*=//')
+          YDAY=$(grep -Eo 'yesterday=[0-9]+' run.log | sed 's/.*=//')
+          echo "today=${TODAY:-0}" >> "$GITHUB_OUTPUT"
+          echo "yesterday=${YDAY:-0}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Discord (success)
+        if: ${{ success() && steps.label.outputs.tag != 'Manual/Ad-hoc' && steps.label.outputs.tag != 'SKIP' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          URL="${DISCORD_WEBHOOK_URL}?wait=true"
+          WHEN_PT=$(TZ=America/Los_Angeles date +'%I:%M%p %Z' | sed 's/^0//')
+          PAYLOAD=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg run  "${{ github.run_number }}" \
+            --arg url  "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg when "$WHEN_PT" \
+            --arg tag  "${{ steps.label.outputs.tag }}" \
+            --arg today "${{ steps.parse.outputs.today }}" \
+            --arg yday "${{ steps.parse.outputs.yesterday }}" \
+            '{content: "✅ Daily Bread update completed\n• Check: \($tag)\n• When: \($when)\n• Today marked: \($today)\n• Yesterday marked: \($yday)\n• Repo: \($repo)\n• Run: #\($run)\n• Logs: \($url)"}')
+          curl -sS -H "Content-Type: application/json" -d "$PAYLOAD" "$URL" > /dev/null
+
+      - name: Notify Discord (failure)
+        if: ${{ failure() && steps.label.outputs.tag != 'Manual/Ad-hoc' && steps.label.outputs.tag != 'SKIP' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          URL="${DISCORD_WEBHOOK_URL}?wait=true"
+          PAYLOAD=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg run  "${{ github.run_number }}" \
+            --arg url  "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg tag "${{ steps.label.outputs.tag }}" \
+            '{content: "❌ Daily Bread update failed\n• Check: \($tag)\n• Repo: \($repo)\n• Run: #\($run)\n• Logs: \($url)"}')
+          curl -sS -H "Content-Type: application/json" -d "$PAYLOAD" "$URL" > /dev/null
+
+      - name: Skip note (outside windows)
+        if: ${{ steps.label.outputs.tag == 'Skipped' }}
+        run: echo "Outside approved windows; run skipped cleanly."
+

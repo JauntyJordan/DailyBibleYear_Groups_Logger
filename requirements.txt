@@ -1,0 +1,3 @@
+discord.py==2.*
+gspread==6.*
+google-auth==2.*
