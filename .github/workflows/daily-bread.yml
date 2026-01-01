@@ -55,6 +55,9 @@ jobs:
           TAB_GROUPS: ${{ vars.TAB_GROUPS }}
           TAB_MAPPING: ${{ vars.TAB_MAPPING }}
 
+          STATUS_CHANNEL_ID: ${{ vars.STATUS_CHANNEL_ID }}
+
+
           DRY_RUN: ${{ vars.DRY_RUN }}
           RUN_ONCE: ${{ vars.RUN_ONCE }}
 
