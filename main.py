@@ -352,8 +352,8 @@ async def main():
             ws_ind = _ws(TAB_INDIVIDUALS)
             ws_grp = _ws(TAB_GROUPS)
 
-            col_ind_today = _find_date_col(ws_ind, today)
-            col_grp_today = _find_date_col(ws_grp, today)
+            col_ind_today = find_date_col(ws_ind, today)
+            col_grp_today = find_date_col(ws_grp, today)
 
             row_map_ind = _build_row_map(ws_ind)
 
@@ -390,7 +390,7 @@ async def main():
             # Counts for summary (post-update)
             today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
             y_marked = 0
-            col_ind_y = _find_date_col(ws_ind, yesterday)
+            col_ind_y = find_date_col(ws_ind, yesterday)
             if col_ind_y:
                 y_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
 
