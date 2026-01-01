@@ -388,11 +388,16 @@ async def main():
                 updated_groups += 1
 
             # Counts for summary (post-update)
-            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
-            y_marked = 0
-            col_ind_y = find_date_col(ws_ind, yesterday)
-            if col_ind_y:
-                y_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
+            col_ind_y = None
+            try:
+              col_ind_y = find_date_col(ws_ind, yesterday)
+            except RuntimeError:
+              col_ind_y = None
+
+            yesterday_marked = None
+            if col_ind_y is not None:
+              yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
+
 
             end = _now_local()
             duration_s = int((end - start).total_seconds())
