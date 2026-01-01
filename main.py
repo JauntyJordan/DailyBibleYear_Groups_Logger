@@ -108,33 +108,42 @@ def _normalize_label(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.upper()
 
-
-def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
-    """Find 1-based column index in row 1 matching target_date (supports multiple formats)."""
-    headers = ws.row_values(1)
-    # Note: %-m is not supported on Windows, but GitHub Actions runners are Linux.
-    targets = {
-        target_date.strftime("%Y-%m-%d"),
-        target_date.strftime("%-m/%-d/%Y"),
-        target_date.strftime("%m/%d/%Y"),
-        target_date.strftime("%-m/%-d/%y"),
-        target_date.strftime("%m/%d/%y"),
+def find_date_col(sheet, target_date: date, header_rows=(1, 2, 3)):
+    """
+    Returns 1-based column index where the header matches target_date.
+    Searches multiple header rows and multiple formats (including sheet display values).
+    """
+    # Formats to try against header text
+    candidates = {
+        target_date.isoformat(),                  # 2026-01-01
+        target_date.strftime("%-m/%-d/%y"),        # 1/1/26  (mac/linux)
+        target_date.strftime("%m/%d/%y"),          # 01/01/26
+        target_date.strftime("%-m/%-d/%Y"),        # 1/1/2026
+        target_date.strftime("%m/%d/%Y"),          # 01/01/2026
     }
-    for idx, raw in enumerate(headers, start=1):
-        v = (raw or "").strip()
-        if not v:
-            continue
-        if v in targets:
-            return idx
-        # last-resort ISO parse
-        try:
-            dt = datetime.fromisoformat(v.replace("Z", "").strip()).date()
-            if dt == target_date:
-                return idx
-        except Exception:
-            pass
-    return None
 
+    # Windows compatibility for %-m / %-d (if you ever run locally on Windows)
+    candidates.add(target_date.strftime("%#m/%#d/%y"))
+    candidates.add(target_date.strftime("%#m/%#d/%Y"))
+
+    for r in header_rows:
+        row_vals = sheet.row_values(r)
+        for idx, v in enumerate(row_vals, start=1):
+            if v.strip() in candidates:
+                return idx
+
+            # Also try parsing whatever is in the cell as a date
+            try:
+                parsed = datetime.strptime(v.strip(), "%m/%d/%y").date()
+                if parsed == target_date:
+                    return idx
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        f"Date column not found for {target_date.isoformat()}. "
+        f"Checked rows {header_rows} with formats: {sorted(candidates)}"
+    )
 
 def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
     if DRY_RUN:
