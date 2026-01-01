@@ -10,16 +10,33 @@ from google.oauth2.service_account import Credentials
 
 # -------------------- ENV / CONFIG --------------------
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"               # set to '1' in workflow while testing
-RUN_ONCE = os.getenv("RUN_ONCE", "1") == "1"             # Actions default: run once then exit
+RUN_ONCE = os.getenv("RUN_ONCE", "0") == "1"             # Actions default: run once then exit
 SHEET_NAME = os.getenv("SHEET_NAME", "").strip()         # Google Sheet title
+
+TRACK_CHANNEL_ID = int(os.getenv("TRACK_CHANNEL_ID", "0") or "0")
+if not TRACK_CHANNEL_ID:
+    raise RuntimeError("TRACK_CHANNEL_ID env var is required")
+
+REQUIRE_AUTHOR_ID = int(os.getenv("REQUIRE_AUTHOR_ID", "0") or "0")
+if not REQUIRE_AUTHOR_ID:
+    raise RuntimeError("REQUIRE_AUTHOR_ID env var is required")
+
+TITLE_MATCH = (os.getenv("TITLE_MATCH", "") or "").strip().lower()
+if not TITLE_MATCH:
+    raise RuntimeError("TITLE_MATCH env var is required")
+
+TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
+
+TAB_INDIVIDUALS = os.getenv("TAB_INDIVIDUALS", "Individuals")
+TAB_GROUPS = os.getenv("TAB_GROUPS", "Groups")
+TAB_MAPPING = os.getenv("TAB_MAPPING", "Member Mapping")
+
 if not SHEET_NAME:
     raise RuntimeError("SHEET_NAME env var is required")
 
 # Channel id env: supports either DBR_CHANNEL_ID or CHANNEL_ID
 _env_ch = os.getenv("DBR_CHANNEL_ID") or os.getenv("CHANNEL_ID")
-if not _env_ch:
-    raise RuntimeError("DBR_CHANNEL_ID (or CHANNEL_ID) env var is required")
-DAILY_BREAD_CHANNEL_ID = int(_env_ch)
+DAILY_BREAD_CHANNEL_ID = int(_env_ch) if _env_ch else None
 
 DAILY_BREAD_MATCH = "daily bread"                        # phrase found in content or embed title
 LOOKBACK_DAYS = 3                                        # channel history window
