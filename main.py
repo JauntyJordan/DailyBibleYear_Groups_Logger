@@ -116,7 +116,7 @@ def _load_mappings() -> dict[int, str]:
       rows below:   1645520343207 , JORDAN (RICKY)
     """
     try:
-        ws = workbook.worksheet("Member Mapping")
+        ws = workbook.worksheet(TAB_MAPPING)
     except gspread.WorksheetNotFound:
         print("Mappings tab not found; no one will be marked.")
         return {}
@@ -147,21 +147,6 @@ def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
         return
     ws.update_cell(row, col, "TRUE" if value else "FALSE")
 
-
-def _find_row_by_exact_label(ws: gspread.Worksheet, sheet_label: str) -> int | None:
-    """Find row in column A whose value equals sheet_label (trim, case-sensitive)."""
-    colA = ws.col_values(1)
-    target = (sheet_label or "").strip()
-    # exact match first
-    for idx, val in enumerate(colA, start=1):
-        if (val or "").strip() == target:
-            return idx
-    # fallback case-insensitive match
-    t_low = target.lower()
-    for idx, val in enumerate(colA, start=1):
-        if (val or "").strip().lower() == t_low:
-            return idx
-    return None
 # Cache for column-A lookups per worksheet id
 _ROW_MAP_CACHE: dict[int, dict[str, int]] = {}
 
@@ -361,52 +346,8 @@ async def _update_checkmarks_for_message(channel: discord.TextChannel,
     print(f"{verb} {updated} members for {post_date} on {tab}.")
     return updated
 
-async def run_dbr_once():
-    """Find DB posts for today & yesterday and update checkboxes based on Mappings only."""
-    la_today = datetime.now(TZ_LA).date()
-    la_yday = la_today - timedelta(days=1)
-
-    mappings = _load_mappings()
-    if not mappings:
-        print("No mappings; nothing to do.")
-        return
-
-    channel = bot.get_channel(DAILY_BREAD_CHANNEL_ID)
-    if not isinstance(channel, discord.TextChannel):
-        print("Channel not found or not a text channel.")
-        return
-
-    today_msg = await _find_db_message_for_date(channel, la_today)
-    yday_msg  = await _find_db_message_for_date(channel, la_yday)
-
-    # Run once per day and capture counts
-    t = await _update_checkmarks_for_message(channel, today_msg, la_today, mappings)
-    y = await _update_checkmarks_for_message(channel, yday_msg,  la_yday,  mappings)
-
-    # Machine-readable summary for the workflow parser
-    print(f"SUMMARY: today={t or 0} yesterday={y or 0}")
-
-    # Optional: post a human summary to a separate channel
-    log_channel_id = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
-    if log_channel_id:
-        log_channel = bot.get_channel(log_channel_id)
-        if isinstance(log_channel, discord.TextChannel):
-            try:
-                await log_channel.send(
-                    f"✅ Daily Bread update summary\n"
-                    f"• Today marked: {t or 0}\n"
-                    f"• Yesterday marked: {y or 0}"
-                )
-            except Exception as e:
-                print(f"Failed to send log message: {e}")
-
-TRACK_MESSAGE_ID = int(os.getenv("TRACK_MESSAGE_ID", "0") or "0")
 TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
 REQUIRE_AUTHOR_ID = int(os.getenv("REQUIRE_AUTHOR_ID", "0") or "0")
-
-TAB_INDIVIDUALS = os.getenv("TAB_INDIVIDUALS", "Individuals")
-TAB_GROUPS = os.getenv("TAB_GROUPS", "Groups")
-TAB_MAPPING = os.getenv("TAB_MAPPING", "Member Mapping")
 
 _processed = set()  # simple in-memory de-dupe
 
@@ -419,6 +360,8 @@ def _emoji_matches(reaction_emoji) -> bool:
     return str(name) == TRACK_EMOJI
 
 @bot.event
+if payload.channel_id != TRACK_CHANNEL_ID:
+    return
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     """
     Uses raw events so we don't miss events when messages aren't cached.
@@ -427,8 +370,6 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if payload.user_id is None:
             return
         if payload.user_id == bot.user.id:
-            return
-        if TRACK_MESSAGE_ID and payload.message_id != TRACK_MESSAGE_ID:
             return
         if not _emoji_matches(payload.emoji):
             return
@@ -499,21 +440,6 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     except Exception as e:
         print("[ERR] on_raw_reaction_add:", repr(e))
-
-
-
-
-# -------------------- ONE-SHOT RUNNER -----------------
-async def _run_and_quit():
-    await bot.wait_until_ready()
-    await run_dbr_once()
-    await asyncio.sleep(1)
-    await bot.close()
-
-if RUN_ONCE:
-    @bot.event
-    async def on_ready():
-        asyncio.create_task(_run_and_quit())
 
 # -------------------- START --------------------------
 token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
