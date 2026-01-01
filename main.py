@@ -1,6 +1,8 @@
-# main.py  — Daily Bread one-shot updater (GitHub Actions friendly)
-import os, json, asyncio, re, unicodedata
-from datetime import datetime, timedelta, date, time
+# main.py — Daily Bible Year Groups Logger (reaction-driven)
+import os
+import json
+import re
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 import discord
@@ -9,9 +11,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # -------------------- ENV / CONFIG --------------------
-DRY_RUN = os.getenv("DRY_RUN", "0") == "1"               # set to '1' in workflow while testing
-RUN_ONCE = os.getenv("RUN_ONCE", "0") == "1"             # Actions default: run once then exit
-SHEET_NAME = os.getenv("SHEET_NAME", "").strip()         # Google Sheet title
+TZ_LA = ZoneInfo("America/Los_Angeles")
+
+DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
+
+SHEET_NAME = os.getenv("SHEET_NAME", "").strip()
+if not SHEET_NAME:
+    raise RuntimeError("SHEET_NAME env var is required")
 
 TRACK_CHANNEL_ID = int(os.getenv("TRACK_CHANNEL_ID", "0") or "0")
 if not TRACK_CHANNEL_ID:
@@ -30,15 +36,6 @@ TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
 TAB_INDIVIDUALS = os.getenv("TAB_INDIVIDUALS", "Individuals")
 TAB_GROUPS = os.getenv("TAB_GROUPS", "Groups")
 TAB_MAPPING = os.getenv("TAB_MAPPING", "Member Mapping")
-
-if not SHEET_NAME:
-    raise RuntimeError("SHEET_NAME env var is required")
-
-# Channel id env: supports either DBR_CHANNEL_ID or CHANNEL_ID
-_env_ch = os.getenv("DBR_CHANNEL_ID") or os.getenv("CHANNEL_ID")
-DAILY_BREAD_CHANNEL_ID = int(_env_ch) if _env_ch else None
-
-TZ_LA = ZoneInfo("America/Los_Angeles")
 
 # -------------------- DISCORD BOT ---------------------
 intents = discord.Intents.default()
@@ -60,36 +57,26 @@ scopes = [
 credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
 
-# Open workbook once
 workbook = gc.open(SHEET_NAME)
 
 # -------------------- SHEET HELPERS -------------------
-def month_tab_for(d: date) -> str:
-    return d.strftime("%B")  # "August"
-
 DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")
 
-def _title_matches_date(title: str, target: date) -> bool:
-    m = DATE_RE.search(title or "")
-    if not m:
-        return False
-    mm, dd, yy = map(int, m.groups())
-    if yy < 100:
-        yy += 2000
-    try:
-        return date(yy, mm, dd) == target
-    except ValueError:
-        return False
+def _ws(name: str) -> gspread.Worksheet:
+    return workbook.worksheet(name)
+
+def _today_la() -> date:
+    return datetime.now(TZ_LA).date()
 
 def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
-    """Find the 1-based column index in row 1 matching target_date."""
+    """Find 1-based column index in row 1 matching target_date (supports multiple formats)."""
     headers = ws.row_values(1)
     targets = {
-        target_date.strftime("%Y-%m-%d"),   # 2025-08-27
-        target_date.strftime("%-m/%-d/%Y"), # 8/27/2025 (posix)
-        target_date.strftime("%m/%d/%Y"),   # 08/27/2025
-        target_date.strftime("%-m/%-d/%y"), # 8/27/25 (your sheet)
-        target_date.strftime("%m/%d/%y"),   # 08/27/25
+        target_date.strftime("%Y-%m-%d"),
+        target_date.strftime("%-m/%-d/%Y"),
+        target_date.strftime("%m/%d/%Y"),
+        target_date.strftime("%-m/%-d/%y"),
+        target_date.strftime("%m/%d/%y"),
     }
     for idx, raw in enumerate(headers, start=1):
         v = (raw or "").strip()
@@ -97,7 +84,7 @@ def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
             continue
         if v in targets:
             return idx
-        # last-resort attempt: ISO parse
+        # last-resort ISO parse
         try:
             dt = datetime.fromisoformat(v.replace("Z", "").strip()).date()
             if dt == target_date:
@@ -106,17 +93,22 @@ def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
             pass
     return None
 
+def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
+    if DRY_RUN:
+        print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
+        return
+    ws.update_cell(row, col, "TRUE" if value else "FALSE")
+
 def _load_mappings() -> dict[int, str]:
     """
-    Read 'Mappings' tab -> dict { user_id (int) : exact SHEET_NAME (str) }.
-    Sheet format:
-      A1: USER_ID   B1: SHEET_NAME
-      rows below:   1645520343207 , JORDAN (RICKY)
+    Member Mapping tab:
+      Col A: Discord user id
+      Col B: sheet name label (must match Individuals col A)
     """
     try:
         ws = workbook.worksheet(TAB_MAPPING)
     except gspread.WorksheetNotFound:
-        print("Mappings tab not found; no one will be marked.")
+        print(f"[ERR] '{TAB_MAPPING}' tab not found; no one will be marked.")
         return {}
     rows = ws.get_all_values()
     mp: dict[int, str] = {}
@@ -129,21 +121,8 @@ def _load_mappings() -> dict[int, str]:
         try:
             mp[int(uid_raw)] = label
         except ValueError:
-            print(f"Skipping mapping with non-integer USER_ID: {uid_raw}")
-    print(f"Loaded {len(mp)} mappings.")
+            print(f"[WARN] Skipping mapping with non-integer USER_ID: {uid_raw}")
     return mp
-
-def _ws(name: str) -> gspread.Worksheet:
-    return workbook.worksheet(name)
-
-def _today_la() -> date:
-    return datetime.now(TZ_LA).date()
-
-def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
-    if DRY_RUN:
-        print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
-        return
-    ws.update_cell(row, col, "TRUE" if value else "FALSE")
 
 # Cache for column-A lookups per worksheet id
 _ROW_MAP_CACHE: dict[int, dict[str, int]] = {}
@@ -155,8 +134,28 @@ def _normalize_label(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.upper()
 
+def _get_row_map(ws: gspread.Worksheet) -> dict[str, int]:
+    """Build once per worksheet: map of exact + normalized labels -> row index."""
+    key = ws.id
+    if key in _ROW_MAP_CACHE:
+        return _ROW_MAP_CACHE[key]
+    colA = ws.col_values(1)
+    m: dict[str, int] = {}
+    for idx, val in enumerate(colA, start=1):
+        v = (val or "").strip()
+        if not v:
+            continue
+        m[v] = idx
+        m.setdefault(_normalize_label(v), idx)
+    _ROW_MAP_CACHE[key] = m
+    return m
+
+def _find_row_by_label(ws: gspread.Worksheet, sheet_label: str) -> int | None:
+    m = _get_row_map(ws)
+    target = (sheet_label or "").strip()
+    return m.get(target) or m.get(_normalize_label(target))
+
 def _split_roster(roster_cell: str) -> list[str]:
-    # "A, B, C" -> ["A", "B", "C"] normalized
     if not roster_cell:
         return []
     parts = [p.strip() for p in roster_cell.split(",")]
@@ -164,22 +163,24 @@ def _split_roster(roster_cell: str) -> list[str]:
 
 def _load_groups() -> list[dict]:
     """
-    Reads Groups tab:
-      Col A: Group label (Group 1, Group 2...)
-      Col B: roster (comma-separated names)
-    Returns list of {row, group_label, members_norm}
+    Groups tab:
+      Col A: Group label
+      Col B: roster (comma-separated names, matching Individuals col A labels)
+    Returns: list of {row, group_label, members_norm}
     """
-    ws = _ws(os.getenv("TAB_GROUPS", "Groups"))
+    ws = _ws(TAB_GROUPS)
     values = ws.get_all_values()
-    out = []
-    # row 1 is header; start at row 2
-    for i, r in enumerate(values[1:], start=2):
+    out: list[dict] = []
+    for i, r in enumerate(values[1:], start=2):  # skip header row
         group_label = (r[0] or "").strip() if len(r) > 0 else ""
         roster = (r[1] or "").strip() if len(r) > 1 else ""
         if not group_label:
             continue
-        members_norm = _split_roster(roster)
-        out.append({"row": i, "group_label": group_label, "members_norm": members_norm})
+        out.append({
+            "row": i,
+            "group_label": group_label,
+            "members_norm": _split_roster(roster),
+        })
     return out
 
 def _find_group_for_member(groups: list[dict], member_sheet_name: str) -> dict | None:
@@ -189,173 +190,41 @@ def _find_group_for_member(groups: list[dict], member_sheet_name: str) -> dict |
             return g
     return None
 
-def _get_row_map(ws) -> dict[str, int]:
-    """Build once per worksheet: map of both exact and normalized labels -> row index."""
-    key = ws.id
-    if key in _ROW_MAP_CACHE:
-        return _ROW_MAP_CACHE[key]
-    colA = ws.col_values(1)  # ONE READ ONLY
-    m: dict[str, int] = {}
-    for idx, val in enumerate(colA, start=1):
-        v = (val or "").strip()
-        if not v:
-            continue
-        # exact key
-        m[v] = idx
-        # normalized key (fallback)
-        m.setdefault(_normalize_label(v), idx)
-    _ROW_MAP_CACHE[key] = m
-    return m
-
-def _find_row_by_exact_label(ws, sheet_label: str) -> int | None:
-    m = _get_row_map(ws)
-    # try exact first, then normalized
-    target = (sheet_label or "").strip()
-    return m.get(target) or m.get(_normalize_label(target))
-
-
 # -------------------- DISCORD HELPERS -----------------
-
-def _is_bread_emoji(e) -> bool:
-    """
-    Treats the unicode 🍞 and any custom emoji whose name contains 'bread'
-    as a 'bread' reaction.
-    """
-    s = str(e).lower()
-    return s == "🍞" or "bread" in s  # handles <:bread:123...> etc.
-
-def _bread_count(msg: discord.Message) -> int:
-    """Total count of 'bread' reactions on a message."""
-    return sum(r.count for r in msg.reactions if _is_bread_emoji(r.emoji))
-
-def _total_reacts(msg: discord.Message) -> int:
-    """Total reaction count (all emojis)."""
-    return sum(r.count for r in msg.reactions)
-
-# -------------------- DISCORD HELPERS -----------------
-# Looks only at embedded posts with "Daily Bread" in the title
-async def _find_db_message_for_date(channel: discord.TextChannel, target_local_date: date):
-    """
-    Find today's Daily Bread by:
-      • requiring at least one embed,
-      • requiring embed.title to contain 'daily bread' (case-insensitive),
-      • requiring the message was created on target_local_date (LA),
-      • preferring the candidate with most 🍞 reactions, then total reactions.
-    """
-    after_dt = datetime.now(ZoneInfo("UTC")) - timedelta(days=LOOKBACK_DAYS)
-    candidates: list[discord.Message] = []
-
-    async for m in channel.history(limit=200, oldest_first=False, after=after_dt):
-        if not m.embeds:
-            continue
-
-        title = (m.embeds[0].title or "").lower()
-        if "daily bread" not in title:
-            continue
-
-        created_local = m.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_LA).date()
-        if not (created_local == target_local_date or _title_matches_date(m.embeds[0].title, target_local_date)):
-            continue
-
-
-        candidates.append(m)
-
-    if not candidates:
-        print(f"[DEBUG] no embedded 'Daily Bread' messages found for {target_local_date}")
-        return None
-
-    # Prefer post with most 🍞, then most total reactions
-    candidates.sort(key=lambda msg: (_bread_count(msg), _total_reacts(msg)), reverse=True)
-    chosen = candidates[0]
-    print(
-        f"[DEBUG] chosen(embedded) id={chosen.id} "
-        f"bread={_bread_count(chosen)} reacts={[(str(r.emoji), r.count) for r in chosen.reactions]}"
-    )
-    return chosen
-
-
-async def _reactor_ids(message: discord.Message) -> set[int]:
-    users: set[int] = set()
-    if not message:
-        return users
-
-    # Debug: show the emoji + total count for each reaction
-    print("[DEBUG] reaction counts:",
-          [(str(r.emoji), r.count) for r in message.reactions])
-
-    for rxn in message.reactions:
-        async for u in rxn.users(limit=None):
-            if not u.bot:
-                users.add(u.id)
-    return users
-
-
-# -------------------- CORE UPDATE LOGIC ---------------
-async def _update_checkmarks_for_message(channel: discord.TextChannel,
-                                         msg: discord.Message,
-                                         post_date: date,
-                                         mappings: dict[int, str]):
-    if not msg:
-        return
-    tab = month_tab_for(post_date)
-    ws = workbook.worksheet(tab)
-
-    col = _find_date_column(ws, post_date)
-    if not col:
-        print(f"Date column for {post_date} not found on tab '{tab}'.")
-        return
-
-    ids = await _reactor_ids(msg)
-    if not ids:
-        print(f"No reactors for {post_date} ({tab}).")
-        return
-
-    updated = 0
-    ranges_to_true = []
-
-    row_map = _get_row_map(ws)  # use cached column A
-    for uid in ids:
-        label = mappings.get(uid)
-        if not label:
-            print(f"No mapping for user_id {uid}; skipping.")
-            continue
-
-        row = _find_row_by_exact_label(ws, label)
-        if not row:
-            print(f"Mapping found but label '{label}' not present in column A of '{tab}'.")
-            continue
-
-        a1 = gspread.utils.rowcol_to_a1(row, col)
-        sheet_range = f"'{tab}'!{a1}"
-        if DRY_RUN:
-            print(f"[DRY] Would mark '{label}' on {post_date} (tab {tab}, row {row}, col {col}).")
-        else:
-            ranges_to_true.append({"range": sheet_range, "values": [["TRUE"]]})
-        updated += 1
-
-    if not DRY_RUN and ranges_to_true:
-        # ONE batch write instead of many updates
-        workbook.values_batch_update({
-            "valueInputOption": "USER_ENTERED",
-            "data": ranges_to_true
-        })
-
-    verb = "Would mark" if DRY_RUN else "Marked"
-    print(f"{verb} {updated} members for {post_date} on {tab}.")
-    return updated
-
-_processed = set()  # simple in-memory de-dupe
+_processed: set[tuple] = set()
 
 def _emoji_matches(reaction_emoji) -> bool:
-    # Handles unicode emoji and custom emoji names
     try:
-        name = reaction_emoji.name  # discord.PartialEmoji
+        name = reaction_emoji.name  # PartialEmoji
     except Exception:
         name = str(reaction_emoji)
     return str(name) == TRACK_EMOJI
 
+def _message_matches_daily_post(msg: discord.Message, today: date) -> bool:
+    # Author must be PC
+    if not msg.author or msg.author.id != REQUIRE_AUTHOR_ID:
+        return False
+
+    # Must be posted today in LA
+    created_la = msg.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_LA).date()
+    if created_la != today:
+        return False
+
+    # Must match TITLE_MATCH in content or embed title/description
+    haystacks: list[str] = []
+    if msg.content:
+        haystacks.append(msg.content.lower())
+    for emb in (msg.embeds or []):
+        if emb.title:
+            haystacks.append(emb.title.lower())
+        if emb.description:
+            haystacks.append(emb.description.lower())
+
+    return any(TITLE_MATCH in h for h in haystacks)
+
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    # Only watch the one channel
     if payload.channel_id != TRACK_CHANNEL_ID:
         return
 
@@ -365,8 +234,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if not _emoji_matches(payload.emoji):
             return
 
-        # de-dupe
         today = _today_la()
+
+        # Simple in-memory de-dupe (prevents repeats in the same process)
         dedupe_key = (payload.message_id, payload.user_id, str(payload.emoji), today.isoformat())
         if dedupe_key in _processed:
             return
@@ -375,32 +245,14 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
         msg = await channel.fetch_message(payload.message_id)
 
-        # Author check (PC)
-        if REQUIRE_AUTHOR_ID and msg.author and msg.author.id != REQUIRE_AUTHOR_ID:
+        if not _message_matches_daily_post(msg, today):
             return
 
-        # Must be today's post (LA)
-        created_la = msg.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_LA).date()
-        if created_la != today:
-            return
-
-        # Must match title/content phrase
-        haystacks = []
-        if msg.content:
-            haystacks.append(msg.content.lower())
-        for emb in (msg.embeds or []):
-            if emb.title:
-                haystacks.append(emb.title.lower())
-            if emb.description:
-                haystacks.append(emb.description.lower())
-
-        if not any(TITLE_MATCH in h for h in haystacks):
-            return
-
+        # Resolve user -> sheet label
         mappings = _load_mappings()
         sheet_name = mappings.get(int(payload.user_id))
         if not sheet_name:
-            print(f"[SKIP] user_id {payload.user_id} not in {TAB_MAPPING}")
+            print(f"[SKIP] user_id {payload.user_id} not in '{TAB_MAPPING}'")
             return
 
         ws_ind = _ws(TAB_INDIVIDUALS)
@@ -412,9 +264,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             print(f"[ERR] date column not found for {today} (check header row formatting)")
             return
 
-        row_ind = _find_row_by_exact_label(ws_ind, sheet_name)
+        row_ind = _find_row_by_label(ws_ind, sheet_name)
         if not row_ind:
-            print(f"[ERR] could not find row for '{sheet_name}' in Individuals col A")
+            print(f"[ERR] could not find row for '{sheet_name}' in '{TAB_INDIVIDUALS}' col A")
             return
 
         # 1) Individuals TRUE
@@ -445,12 +297,11 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     except Exception as e:
         print("[ERR] on_raw_reaction_add:", repr(e))
 
-
 # -------------------- START --------------------------
 token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
 if not token:
     raise RuntimeError("Discord token env missing (DISCORD_TOKEN or DISCORD_BOT_TOKEN).")
 token = token.strip()
+
 print("Starting… (token length:", len(token), ")")
 bot.run(token)
-
