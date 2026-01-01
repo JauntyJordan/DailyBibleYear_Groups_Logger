@@ -38,5 +38,23 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Discord bot
-        run: |
-          python main.py
+        run: python main.py
+        env:
+          # Secrets (already correct)
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+
+          # Repository variables (THIS WAS MISSING)
+          SHEET_NAME: ${{ vars.SHEET_NAME }}
+          TRACK_CHANNEL_ID: ${{ vars.TRACK_CHANNEL_ID }}
+          REQUIRE_AUTHOR_ID: ${{ vars.REQUIRE_AUTHOR_ID }}
+          TITLE_MATCH: ${{ vars.TITLE_MATCH }}
+          TRACK_EMOJI: ${{ vars.TRACK_EMOJI }}
+
+          TAB_INDIVIDUALS: ${{ vars.TAB_INDIVIDUALS }}
+          TAB_GROUPS: ${{ vars.TAB_GROUPS }}
+          TAB_MAPPING: ${{ vars.TAB_MAPPING }}
+
+          DRY_RUN: ${{ vars.DRY_RUN }}
+          RUN_ONCE: ${{ vars.RUN_ONCE }}
+
