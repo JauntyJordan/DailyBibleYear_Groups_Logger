@@ -1,19 +1,47 @@
-# main.py — Daily Bible Year Groups Logger (reaction-driven)
-import os
+"""Bible In A Year – Groups Logger
+
+Designed for scheduled runs (e.g., via GitHub Actions).
+
+Per run:
+  1) Find today's target post in TRACK_CHANNEL_ID authored by REQUIRE_AUTHOR_ID
+     whose content/embed includes TITLE_MATCH.
+  2) Collect users who reacted with TRACK_EMOJI.
+  3) Update Google Sheets:
+       - Individuals: mark TRUE/FALSE for each mapped member
+       - Groups: mark TRUE only if every member in roster reacted
+  4) Post a status summary message to Discord.
+
+Notes:
+  - This script runs once and exits (no long-running bot process).
+  - It reads all reactions at the time of the run, so it is robust to downtime.
+"""
+
+from __future__ import annotations
+
 import json
+import os
 import re
-from datetime import datetime, date
+from dataclasses import dataclass
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
-from discord.ext import commands
 import gspread
 from google.oauth2.service_account import Credentials
 
-# -------------------- ENV / CONFIG --------------------
-TZ_LA = ZoneInfo("America/Los_Angeles")
+
+# -------------------- CONFIG --------------------
+TZ = ZoneInfo(os.getenv("TIMEZONE", "America/Los_Angeles"))
 
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
+
+DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN") or "").strip()
+if not DISCORD_TOKEN:
+    raise RuntimeError("Discord token env missing (DISCORD_TOKEN or DISCORD_BOT_TOKEN).")
+
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "").strip()
+if not GOOGLE_CREDS_JSON:
+    raise RuntimeError("GOOGLE_CREDS_JSON secret is missing")
 
 SHEET_NAME = os.getenv("SHEET_NAME", "").strip()
 if not SHEET_NAME:
@@ -31,24 +59,22 @@ TITLE_MATCH = (os.getenv("TITLE_MATCH", "") or "").strip().lower()
 if not TITLE_MATCH:
     raise RuntimeError("TITLE_MATCH env var is required")
 
-TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
+TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅").strip()
 
 TAB_INDIVIDUALS = os.getenv("TAB_INDIVIDUALS", "Individuals")
 TAB_GROUPS = os.getenv("TAB_GROUPS", "Groups")
 TAB_MAPPING = os.getenv("TAB_MAPPING", "Member Mapping")
 
-# -------------------- DISCORD BOT ---------------------
-intents = discord.Intents.default()
-intents.reactions = True
-intents.message_content = True
-intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "0") or "0")
+if not STATUS_CHANNEL_ID:
+    raise RuntimeError("STATUS_CHANNEL_ID env var is required (where to post the run summary)")
 
-# -------------------- GOOGLE AUTH ---------------------
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
-if not GOOGLE_CREDS_JSON:
-    raise RuntimeError("GOOGLE_CREDS_JSON secret is missing")
+CHECK_NAME = (os.getenv("CHECK_NAME", "Scheduled Check") or "Scheduled Check").strip()
 
+LOOKBACK_MESSAGES = int(os.getenv("LOOKBACK_MESSAGES", "50") or "50")
+
+
+# -------------------- GOOGLE SHEETS --------------------
 creds_dict = json.loads(GOOGLE_CREDS_JSON)
 scopes = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -56,21 +82,37 @@ scopes = [
 ]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
-
 workbook = gc.open(SHEET_NAME)
 
-# -------------------- SHEET HELPERS -------------------
-DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")
 
 def _ws(name: str) -> gspread.Worksheet:
     return workbook.worksheet(name)
 
-def _today_la() -> date:
-    return datetime.now(TZ_LA).date()
+
+def _now_local() -> datetime:
+    return datetime.now(TZ)
+
+
+def _today_local() -> date:
+    return _now_local().date()
+
+
+def _yesterday_local() -> date:
+    return _today_local() - timedelta(days=1)
+
+
+def _normalize_label(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"\s*\(.*?\)\s*$", "", s)  # strip trailing "(...)" if any
+    s = s.replace(".", "")
+    s = re.sub(r"\s+", " ", s)
+    return s.upper()
+
 
 def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
     """Find 1-based column index in row 1 matching target_date (supports multiple formats)."""
     headers = ws.row_values(1)
+    # Note: %-m is not supported on Windows, but GitHub Actions runners are Linux.
     targets = {
         target_date.strftime("%Y-%m-%d"),
         target_date.strftime("%-m/%-d/%Y"),
@@ -93,23 +135,35 @@ def _find_date_column(ws: gspread.Worksheet, target_date: date) -> int | None:
             pass
     return None
 
+
 def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
     if DRY_RUN:
         print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
         return
     ws.update_cell(row, col, "TRUE" if value else "FALSE")
 
+
+def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
+    """Count TRUE values in a given column, excluding header row."""
+    # Fetch whole column once for speed
+    vals = ws.col_values(col)
+    n = 0
+    for v in vals[start_row - 1 :]:
+        if str(v).strip().upper() == "TRUE":
+            n += 1
+    return n
+
+
 def _load_mappings() -> dict[int, str]:
-    """
-    Member Mapping tab:
-      Col A: Discord user id
-      Col B: sheet name label (must match Individuals col A)
+    """Member Mapping tab:
+    Col A: Discord user id
+    Col B: sheet name label (must match Individuals col A)
     """
     try:
         ws = workbook.worksheet(TAB_MAPPING)
     except gspread.WorksheetNotFound:
-        print(f"[ERR] '{TAB_MAPPING}' tab not found; no one will be marked.")
-        return {}
+        raise RuntimeError(f"'{TAB_MAPPING}' tab not found")
+
     rows = ws.get_all_values()
     mp: dict[int, str] = {}
     for r in rows[1:]:
@@ -124,21 +178,9 @@ def _load_mappings() -> dict[int, str]:
             print(f"[WARN] Skipping mapping with non-integer USER_ID: {uid_raw}")
     return mp
 
-# Cache for column-A lookups per worksheet id
-_ROW_MAP_CACHE: dict[int, dict[str, int]] = {}
 
-def _normalize_label(s: str) -> str:
-    s = (s or "").strip()
-    s = re.sub(r"\s*\(.*?\)\s*$", "", s)  # strip trailing "(...)" if any
-    s = s.replace(".", "")
-    s = re.sub(r"\s+", " ", s)
-    return s.upper()
-
-def _get_row_map(ws: gspread.Worksheet) -> dict[str, int]:
-    """Build once per worksheet: map of exact + normalized labels -> row index."""
-    key = ws.id
-    if key in _ROW_MAP_CACHE:
-        return _ROW_MAP_CACHE[key]
+def _build_row_map(ws: gspread.Worksheet) -> dict[str, int]:
+    """Map of exact + normalized labels in Individuals/Groups col A to row index."""
     colA = ws.col_values(1)
     m: dict[str, int] = {}
     for idx, val in enumerate(colA, start=1):
@@ -147,13 +189,8 @@ def _get_row_map(ws: gspread.Worksheet) -> dict[str, int]:
             continue
         m[v] = idx
         m.setdefault(_normalize_label(v), idx)
-    _ROW_MAP_CACHE[key] = m
     return m
 
-def _find_row_by_label(ws: gspread.Worksheet, sheet_label: str) -> int | None:
-    m = _get_row_map(ws)
-    target = (sheet_label or "").strip()
-    return m.get(target) or m.get(_normalize_label(target))
 
 def _split_roster(roster_cell: str) -> list[str]:
     if not roster_cell:
@@ -161,147 +198,247 @@ def _split_roster(roster_cell: str) -> list[str]:
     parts = [p.strip() for p in roster_cell.split(",")]
     return [_normalize_label(p) for p in parts if p.strip()]
 
-def _load_groups() -> list[dict]:
-    """
-    Groups tab:
-      Col A: Group label
-      Col B: roster (comma-separated names, matching Individuals col A labels)
-    Returns: list of {row, group_label, members_norm}
+
+@dataclass(frozen=True)
+class Group:
+    row: int
+    label: str
+    members_norm: tuple[str, ...]
+
+
+def _load_groups() -> list[Group]:
+    """Groups tab:
+    Col A: Group label
+    Col B: roster (comma-separated names, matching Individuals col A labels)
     """
     ws = _ws(TAB_GROUPS)
     values = ws.get_all_values()
-    out: list[dict] = []
+    out: list[Group] = []
     for i, r in enumerate(values[1:], start=2):  # skip header row
         group_label = (r[0] or "").strip() if len(r) > 0 else ""
         roster = (r[1] or "").strip() if len(r) > 1 else ""
         if not group_label:
             continue
-        out.append({
-            "row": i,
-            "group_label": group_label,
-            "members_norm": _split_roster(roster),
-        })
+        out.append(Group(row=i, label=group_label, members_norm=tuple(_split_roster(roster))))
     return out
 
-def _find_group_for_member(groups: list[dict], member_sheet_name: str) -> dict | None:
-    target = _normalize_label(member_sheet_name)
-    for g in groups:
-        if target in g["members_norm"]:
-            return g
-    return None
-
-# -------------------- DISCORD HELPERS -----------------
-_processed: set[tuple] = set()
-
-def _emoji_matches(reaction_emoji) -> bool:
-    try:
-        name = reaction_emoji.name  # PartialEmoji
-    except Exception:
-        name = str(reaction_emoji)
-    return str(name) == TRACK_EMOJI
 
 def _message_matches_daily_post(msg: discord.Message, today: date) -> bool:
-    # Author must be PC
+    # Author must match
     if not msg.author or msg.author.id != REQUIRE_AUTHOR_ID:
         return False
 
-    # Must be posted today in LA
-    created_la = msg.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_LA).date()
-    if created_la != today:
+    # Must be posted today in configured timezone
+    created_local = msg.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ).date()
+    if created_local != today:
         return False
 
-    # Must match TITLE_MATCH in content or embed title/description
     haystacks: list[str] = []
     if msg.content:
         haystacks.append(msg.content.lower())
     for emb in (msg.embeds or []):
         if emb.title:
-            haystacks.append(emb.title.lower())
+            haystacks.append(str(emb.title).lower())
         if emb.description:
-            haystacks.append(emb.description.lower())
+            haystacks.append(str(emb.description).lower())
 
     return any(TITLE_MATCH in h for h in haystacks)
 
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    # Only watch the one channel
-    if payload.channel_id != TRACK_CHANNEL_ID:
-        return
 
+def _emoji_matches(emoji: discord.PartialEmoji | discord.Emoji | str) -> bool:
     try:
-        if payload.user_id is None or payload.user_id == bot.user.id:
-            return
-        if not _emoji_matches(payload.emoji):
-            return
+        name = emoji.name  # PartialEmoji
+    except Exception:
+        name = str(emoji)
+    return str(name) == TRACK_EMOJI
 
-        today = _today_la()
 
-        # Simple in-memory de-dupe (prevents repeats in the same process)
-        dedupe_key = (payload.message_id, payload.user_id, str(payload.emoji), today.isoformat())
-        if dedupe_key in _processed:
-            return
-        _processed.add(dedupe_key)
+async def _find_todays_post(channel: discord.TextChannel, today: date) -> discord.Message | None:
+    """Search recent history for the target post."""
+    async for msg in channel.history(limit=LOOKBACK_MESSAGES, oldest_first=False):
+        if _message_matches_daily_post(msg, today):
+            return msg
+    return None
 
-        channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
-        msg = await channel.fetch_message(payload.message_id)
 
-        if not _message_matches_daily_post(msg, today):
-            return
+async def _get_reactors_for_emoji(msg: discord.Message) -> set[int]:
+    """Return user IDs who reacted with TRACK_EMOJI."""
+    reacted: set[int] = set()
+    for reaction in msg.reactions:
+        if not _emoji_matches(reaction.emoji):
+            continue
+        async for user in reaction.users(limit=None):
+            if user.bot:
+                continue
+            reacted.add(int(user.id))
+    return reacted
 
-        # Resolve user -> sheet label
-        mappings = _load_mappings()
-        sheet_name = mappings.get(int(payload.user_id))
-        if not sheet_name:
-            print(f"[SKIP] user_id {payload.user_id} not in '{TAB_MAPPING}'")
-            return
 
-        ws_ind = _ws(TAB_INDIVIDUALS)
-        ws_grp = _ws(TAB_GROUPS)
+def _compute_group_completions(
+    groups: list[Group],
+    reacted_labels_norm: set[str],
+) -> dict[int, bool]:
+    """Return mapping: group_row -> completion bool."""
+    out: dict[int, bool] = {}
+    for g in groups:
+        if not g.members_norm:
+            out[g.row] = False
+            continue
+        out[g.row] = all(m in reacted_labels_norm for m in g.members_norm)
+    return out
 
-        col_ind = _find_date_column(ws_ind, today)
-        col_grp = _find_date_column(ws_grp, today)
-        if not col_ind or not col_grp:
-            print(f"[ERR] date column not found for {today} (check header row formatting)")
-            return
 
-        row_ind = _find_row_by_label(ws_ind, sheet_name)
-        if not row_ind:
-            print(f"[ERR] could not find row for '{sheet_name}' in '{TAB_INDIVIDUALS}' col A")
-            return
+async def main():
+    start = _now_local()
+    today = _today_local()
+    yesterday = _yesterday_local()
 
-        # 1) Individuals TRUE
-        _set_checkbox(ws_ind, row_ind, col_ind, True)
+    # --- Discord client (single-run) ---
+    intents = discord.Intents.default()
+    intents.guilds = True
+    intents.messages = True
+    intents.message_content = True  # needed if matching TITLE_MATCH in msg.content
+    client = discord.Client(intents=intents)
 
-        # 2) Group recompute
-        groups = _load_groups()
-        g = _find_group_for_member(groups, sheet_name)
-        if not g:
-            print(f"[WARN] no group found containing '{sheet_name}' (Individuals updated only)")
-            return
+    run_url = ""
+    if os.getenv("GITHUB_SERVER_URL") and os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_RUN_ID"):
+        run_url = (
+            f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}"
+            f"/actions/runs/{os.getenv('GITHUB_RUN_ID')}"
+        )
 
-        all_true = True
-        row_map = _get_row_map(ws_ind)
-        for member_norm in g["members_norm"]:
-            r = row_map.get(member_norm)
-            if not r:
-                all_true = False
-                break
-            val = ws_ind.cell(r, col_ind).value
-            if str(val).strip().upper() != "TRUE":
-                all_true = False
-                break
+    @client.event
+    async def on_ready():
+        nonlocal run_url
+        try:
+            channel = await client.fetch_channel(TRACK_CHANNEL_ID)
+            status_channel = await client.fetch_channel(STATUS_CHANNEL_ID)
+            if not isinstance(channel, discord.TextChannel):
+                raise RuntimeError("TRACK_CHANNEL_ID must be a text channel")
+            if not isinstance(status_channel, discord.TextChannel):
+                raise RuntimeError("STATUS_CHANNEL_ID must be a text channel")
 
-        _set_checkbox(ws_grp, g["row"], col_grp, all_true)
-        print(f"[OK] {sheet_name} marked TRUE; {g['group_label']} complete={all_true}")
+            msg = await _find_todays_post(channel, today)
+            if not msg:
+                await status_channel.send(
+                    "\n".join(
+                        [
+                            "❌ Bible In A Year update failed",
+                            f"• Check: {CHECK_NAME}",
+                            f"• When: {start.strftime('%-I:%M%p %Z')}",
+                            f"• Reason: Could not find today's post in <#{TRACK_CHANNEL_ID}>",
+                            f"• Repo: {os.getenv('GITHUB_REPOSITORY', 'local run')}",
+                            f"• Run: #{os.getenv('GITHUB_RUN_NUMBER', 'local')}",
+                            f"• Logs: {run_url}" if run_url else "• Logs: (local)",
+                        ]
+                    )
+                )
+                await client.close()
+                return
 
-    except Exception as e:
-        print("[ERR] on_raw_reaction_add:", repr(e))
+            reactors = await _get_reactors_for_emoji(msg)
 
-# -------------------- START --------------------------
-token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
-if not token:
-    raise RuntimeError("Discord token env missing (DISCORD_TOKEN or DISCORD_BOT_TOKEN).")
-token = token.strip()
+            # --- Sheets updates ---
+            mappings = _load_mappings()  # user_id -> sheet label
+            ws_ind = _ws(TAB_INDIVIDUALS)
+            ws_grp = _ws(TAB_GROUPS)
 
-print("Starting… (token length:", len(token), ")")
-bot.run(token)
+            col_ind_today = _find_date_column(ws_ind, today)
+            col_grp_today = _find_date_column(ws_grp, today)
+            if not col_ind_today or not col_grp_today:
+                raise RuntimeError(
+                    f"Date column not found for {today}. Ensure row 1 headers include the date."
+                )
+
+            row_map_ind = _build_row_map(ws_ind)
+
+            # Build a set of normalized sheet labels that reacted
+            reacted_labels_norm: set[str] = set()
+            updated_individuals = 0
+            skipped_unmapped = 0
+            skipped_no_row = 0
+
+            for user_id, label in mappings.items():
+                has_reacted = user_id in reactors
+                r = row_map_ind.get(label) or row_map_ind.get(_normalize_label(label))
+                if not r:
+                    skipped_no_row += 1
+                    continue
+                _set_checkbox(ws_ind, r, col_ind_today, has_reacted)
+                updated_individuals += 1
+                if has_reacted:
+                    reacted_labels_norm.add(_normalize_label(label))
+
+            # If there are reactors who aren't mapped, count them for visibility
+            for uid in reactors:
+                if uid not in mappings:
+                    skipped_unmapped += 1
+
+            # Groups recompute
+            groups = _load_groups()
+            group_completion = _compute_group_completions(groups, reacted_labels_norm)
+            updated_groups = 0
+            for g in groups:
+                _set_checkbox(ws_grp, g.row, col_grp_today, group_completion.get(g.row, False))
+                updated_groups += 1
+
+            # Counts for summary (post-update)
+            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
+            y_marked = 0
+            col_ind_y = _find_date_column(ws_ind, yesterday)
+            if col_ind_y:
+                y_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
+
+            end = _now_local()
+            duration_s = int((end - start).total_seconds())
+
+            # --- Discord status message ---
+            lines = [
+                "✅ Bible In A Year update completed",
+                f"• Check: {CHECK_NAME}",
+                f"• When: {start.strftime('%-I:%M%p %Z')}",
+                f"• Today marked: {today_marked}",
+                f"• Yesterday marked: {y_marked}",
+                f"• Reactors found: {len(reactors)}",
+                f"• Individuals updated: {updated_individuals}",
+                f"• Groups updated: {updated_groups}",
+                f"• Unmapped reactors: {skipped_unmapped}",
+                f"• Missing rows in Individuals: {skipped_no_row}",
+                f"• Took: {duration_s}s",
+                f"• Repo: {os.getenv('GITHUB_REPOSITORY', 'local run')}",
+                f"• Run: #{os.getenv('GITHUB_RUN_NUMBER', 'local')}",
+                "• Logs:",
+                run_url if run_url else "(local)",
+            ]
+            await status_channel.send("\n".join(lines))
+
+        except Exception as e:
+            # Best effort: post error to status channel
+            try:
+                status_channel = await client.fetch_channel(STATUS_CHANNEL_ID)
+                if isinstance(status_channel, discord.TextChannel):
+                    await status_channel.send(
+                        "\n".join(
+                            [
+                                "❌ Bible In A Year update failed",
+                                f"• Check: {CHECK_NAME}",
+                                f"• When: {start.strftime('%-I:%M%p %Z')}",
+                                f"• Error: {repr(e)}",
+                                f"• Repo: {os.getenv('GITHUB_REPOSITORY', 'local run')}",
+                                f"• Run: #{os.getenv('GITHUB_RUN_NUMBER', 'local')}",
+                                f"• Logs: {run_url}" if run_url else "• Logs: (local)",
+                            ]
+                        )
+                    )
+            except Exception:
+                pass
+        finally:
+            await client.close()
+
+    await client.start(DISCORD_TOKEN)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
