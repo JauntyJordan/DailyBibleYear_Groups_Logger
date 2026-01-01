@@ -388,6 +388,7 @@ async def main():
                 updated_groups += 1
 
             # Counts for summary (post-update)
+            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
             col_ind_y = None
             try:
               col_ind_y = find_date_col(ws_ind, yesterday)
@@ -408,7 +409,7 @@ async def main():
                 f"• Check: {CHECK_NAME}",
                 f"• When: {start.strftime('%-I:%M%p %Z')}",
                 f"• Today marked: {today_marked}",
-                f"• Yesterday marked: {y_marked}",
+                f"• Yesterday marked: {'N/A' if yesterday_marked is None else yesterday_marked}",
                 f"• Reactors found: {len(reactors)}",
                 f"• Individuals updated: {updated_individuals}",
                 f"• Groups updated: {updated_groups}",
