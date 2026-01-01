@@ -38,8 +38,6 @@ if not SHEET_NAME:
 _env_ch = os.getenv("DBR_CHANNEL_ID") or os.getenv("CHANNEL_ID")
 DAILY_BREAD_CHANNEL_ID = int(_env_ch) if _env_ch else None
 
-DAILY_BREAD_MATCH = "daily bread"                        # phrase found in content or embed title
-LOOKBACK_DAYS = 3                                        # channel history window
 TZ_LA = ZoneInfo("America/Los_Angeles")
 
 # -------------------- DISCORD BOT ---------------------
@@ -346,9 +344,6 @@ async def _update_checkmarks_for_message(channel: discord.TextChannel,
     print(f"{verb} {updated} members for {post_date} on {tab}.")
     return updated
 
-TRACK_EMOJI = os.getenv("TRACK_EMOJI", "✅")
-REQUIRE_AUTHOR_ID = int(os.getenv("REQUIRE_AUTHOR_ID", "0") or "0")
-
 _processed = set()  # simple in-memory de-dupe
 
 def _emoji_matches(reaction_emoji) -> bool:
@@ -360,16 +355,12 @@ def _emoji_matches(reaction_emoji) -> bool:
     return str(name) == TRACK_EMOJI
 
 @bot.event
-if payload.channel_id != TRACK_CHANNEL_ID:
-    return
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    """
-    Uses raw events so we don't miss events when messages aren't cached.
-    """
+    if payload.channel_id != TRACK_CHANNEL_ID:
+        return
+
     try:
-        if payload.user_id is None:
-            return
-        if payload.user_id == bot.user.id:
+        if payload.user_id is None or payload.user_id == bot.user.id:
             return
         if not _emoji_matches(payload.emoji):
             return
@@ -381,20 +372,35 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             return
         _processed.add(dedupe_key)
 
-        channel = bot.get_channel(payload.channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(payload.channel_id)
-
+        channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
         msg = await channel.fetch_message(payload.message_id)
 
+        # Author check (PC)
         if REQUIRE_AUTHOR_ID and msg.author and msg.author.id != REQUIRE_AUTHOR_ID:
             return
 
-        # Load mappings each event OR cache; start simple:
-        mappings = _load_mappings()  # {user_id:int -> sheet_name:str}
+        # Must be today's post (LA)
+        created_la = msg.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_LA).date()
+        if created_la != today:
+            return
+
+        # Must match title/content phrase
+        haystacks = []
+        if msg.content:
+            haystacks.append(msg.content.lower())
+        for emb in (msg.embeds or []):
+            if emb.title:
+                haystacks.append(emb.title.lower())
+            if emb.description:
+                haystacks.append(emb.description.lower())
+
+        if not any(TITLE_MATCH in h for h in haystacks):
+            return
+
+        mappings = _load_mappings()
         sheet_name = mappings.get(int(payload.user_id))
         if not sheet_name:
-            print(f"[SKIP] user_id {payload.user_id} not in Member Mapping")
+            print(f"[SKIP] user_id {payload.user_id} not in {TAB_MAPPING}")
             return
 
         ws_ind = _ws(TAB_INDIVIDUALS)
@@ -402,7 +408,6 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
         col_ind = _find_date_column(ws_ind, today)
         col_grp = _find_date_column(ws_grp, today)
-
         if not col_ind or not col_grp:
             print(f"[ERR] date column not found for {today} (check header row formatting)")
             return
@@ -412,7 +417,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             print(f"[ERR] could not find row for '{sheet_name}' in Individuals col A")
             return
 
-        # 1) Set Individuals checkbox TRUE
+        # 1) Individuals TRUE
         _set_checkbox(ws_ind, row_ind, col_ind, True)
 
         # 2) Group recompute
@@ -422,9 +427,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             print(f"[WARN] no group found containing '{sheet_name}' (Individuals updated only)")
             return
 
-        # Check every member in group for today's checkbox
         all_true = True
-        row_map = _get_row_map(ws_ind)  # cached colA map
+        row_map = _get_row_map(ws_ind)
         for member_norm in g["members_norm"]:
             r = row_map.get(member_norm)
             if not r:
@@ -440,6 +444,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     except Exception as e:
         print("[ERR] on_raw_reaction_add:", repr(e))
+
 
 # -------------------- START --------------------------
 token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
