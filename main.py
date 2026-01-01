@@ -83,7 +83,8 @@ scopes = [
 credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
 workbook = gc.open(SHEET_NAME)
-
+print("Opened workbook:", workbook.title)
+print("Worksheets:", [ws.title for ws in workbook.worksheets()])
 
 def _ws(name: str) -> gspread.Worksheet:
     return workbook.worksheet(name)
