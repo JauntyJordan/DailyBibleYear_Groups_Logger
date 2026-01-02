@@ -183,24 +183,21 @@ def _load_mappings() -> dict[int, str]:
         if not uid_raw or not label:
             continue
         try:
-            mp[int(uid_raw)] = label
+            mp[int(uid_raw)] = _normalize_label(label)
         except ValueError:
             print(f"[WARN] Skipping mapping with non-integer USER_ID: {uid_raw}")
     return mp
 
-
 def _build_row_map(ws: gspread.Worksheet) -> dict[str, int]:
-    """Map of exact + normalized labels in Individuals/Groups col A to row index."""
-    colA = ws.col_values(1)
+    """Map normalized Individuals/Groups col A -> row index."""
+    rows = ws.get_all_values()  # preserves row numbers
     m: dict[str, int] = {}
-    for idx, val in enumerate(colA, start=1):
-        v = (val or "").strip()
-        if not v:
-            continue
-        m[v] = idx
-        m.setdefault(_normalize_label(v), idx)
+    for idx, r in enumerate(rows, start=1):
+        val = (r[0] if r else "")  # col A
+        key = _normalize_label(val)
+        if key:
+            m[key] = idx
     return m
-
 
 def _split_roster(roster_cell: str) -> list[str]:
     if not roster_cell:
@@ -364,16 +361,16 @@ async def main():
             skipped_unmapped = 0
             skipped_no_row = 0
 
-            for user_id, label in mappings.items():
+            for user_id, label_norm in mappings.items():
                 has_reacted = user_id in reactors
-                r = row_map_ind.get(label) or row_map_ind.get(_normalize_label(label))
+                r = row_map_ind.get(label_norm)
                 if not r:
                     skipped_no_row += 1
                     continue
                 _set_checkbox(ws_ind, r, col_ind_today, has_reacted)
                 updated_individuals += 1
                 if has_reacted:
-                    reacted_labels_norm.add(_normalize_label(label))
+                    reacted_labels_norm.add(label_norm)
 
             # If there are reactors who aren't mapped, count them for visibility
             for uid in reactors:
