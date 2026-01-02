@@ -2,3 +2,8 @@ creds.json
 .env
 __pycache__/
 *.pyc
+
+# Local secrets
+.env
+env.txt
+*.json
