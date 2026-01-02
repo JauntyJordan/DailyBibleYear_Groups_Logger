@@ -206,14 +206,23 @@ def _load_mappings() -> dict[int, str]:
     return mp
 
 def _build_row_map(ws: gspread.Worksheet) -> dict[str, int]:
-    """Map normalized Individuals/Groups col A -> row index."""
-    rows = ws.get_all_values()  # preserves row numbers
+    rows = ws.get_all_values()
     m: dict[str, int] = {}
+
     for idx, r in enumerate(rows, start=1):
-        val = (r[0] if r else "")  # col A
-        key = _normalize_label(val)
+        if not r or not r[0]:
+            continue
+
+        raw = r[0].strip()
+
+        # Skip section headers (ALL CAPS, no spaces like names)
+        if raw.isupper():
+            continue
+
+        key = _normalize_label(raw)
         if key:
             m[key] = idx
+
     return m
 
 def _split_roster(roster_cell: str) -> list[str]:
