@@ -50,6 +50,7 @@ jobs:
           REQUIRE_AUTHOR_ID: ${{ vars.REQUIRE_AUTHOR_ID }}
           TITLE_MATCH: ${{ vars.TITLE_MATCH }}
           TRACK_EMOJI: ${{ vars.TRACK_EMOJI }}
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
 
           TAB_INDIVIDUALS: ${{ vars.TAB_INDIVIDUALS }}
           TAB_GROUPS: ${{ vars.TAB_GROUPS }}
