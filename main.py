@@ -82,7 +82,12 @@ scopes = [
 ]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
-workbook = gc.open(SHEET_NAME)
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "").strip()
+if not SPREADSHEET_ID:
+    raise RuntimeError("SPREADSHEET_ID env var is required")
+
+workbook = gc.open_by_key(SPREADSHEET_ID)
+
 print("Opened workbook:", workbook.title)
 print("Workbook ID:", workbook.id)
 print("Workbook URL:", workbook.url)
