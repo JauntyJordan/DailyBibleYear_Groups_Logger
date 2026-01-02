@@ -116,43 +116,45 @@ def _normalize_label(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.upper()
 
-def find_date_col(sheet, target_date: date, header_rows=(1,)):
+def find_date_col(sheet, target_date: date, header_row: int, start_col: int):
     """
     Returns 1-based column index where the header matches target_date.
-    Assumes date headers are actual dates formatted as m/d/yy or m/d/yyyy.
     """
+    candidates = {
+        target_date.strftime("%-m/%-d/%y"),
+        target_date.strftime("%m/%d/%y"),
+        target_date.strftime("%-m/%-d/%Y"),
+        target_date.strftime("%m/%d/%Y"),
+        target_date.isoformat(),
+    }
 
-    for r in header_rows:
-        row_vals = sheet.get(f"{r}:{r}")[0]
-        print("HEADER ROW:", row_vals)
+    # Windows compatibility
+    candidates.add(target_date.strftime("%#m/%#d/%y"))
+    candidates.add(target_date.strftime("%#m/%#d/%Y"))
 
-        for idx, v in enumerate(row_vals, start=1):
-            if not v:
-                continue
+    row_vals = sheet.get(f"{header_row}:{header_row}")[0]
+    print("HEADER ROW:", row_vals)
 
-            text = str(v).replace("\xa0", " ").strip()
+    for idx in range(start_col - 1, len(row_vals)):
+        v = row_vals[idx]
+        if not v:
+            continue
 
-            # Skip non-date headers
-            if text.lower() in {
-                "groups",
-                "dates",
-                "current streak 🔥",
-                "longest streak",
-                "false",
-                "finished",
-            }:
-                continue
+        text = str(v).replace("\xa0", " ").strip()
 
-            # Parse date directly
-            for fmt in ("%m/%d/%y", "%m/%d/%Y"):
-                try:
-                    if datetime.strptime(text, fmt).date() == target_date:
-                        return idx
-                except ValueError:
-                    continue
+        if text in candidates:
+            return idx + 1
+
+        for fmt in ("%m/%d/%y", "%m/%d/%Y"):
+            try:
+                if datetime.strptime(text, fmt).date() == target_date:
+                    return idx + 1
+            except ValueError:
+                pass
 
     raise RuntimeError(
-        f"Date column not found for {target_date.isoformat()} in rows {header_rows}"
+        f"Date column not found for {target_date.isoformat()} "
+        f"in row {header_row}, starting col {start_col}"
     )
 
 
@@ -370,8 +372,8 @@ async def main():
             ws_ind = _ws(TAB_INDIVIDUALS)
             ws_grp = _ws(TAB_GROUPS)
 
-            col_ind_today = find_date_col(ws_ind, today, header_rows=(1,))
-            col_grp_today = find_date_col(ws_grp, today, header_rows=(2,))
+            col_ind_today = find_date_col(ws_ind, today, header_rows=1, start_col=3)
+            col_grp_today = find_date_col(ws_grp, today, header_rows=2, start_col=5)
 
             row_map_ind = _build_row_map(ws_ind, name_col=1)
 
