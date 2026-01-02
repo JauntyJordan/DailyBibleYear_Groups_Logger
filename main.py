@@ -372,8 +372,8 @@ async def main():
             ws_ind = _ws(TAB_INDIVIDUALS)
             ws_grp = _ws(TAB_GROUPS)
 
-            col_ind_today = find_date_col(ws_ind, today, header_rows=1, start_col=3)
-            col_grp_today = find_date_col(ws_grp, today, header_rows=2, start_col=5)
+            col_ind_today = find_date_col(ws_ind, today, 1, 3)
+            col_grp_today = find_date_col(ws_grp, today, 2, 5)
 
             row_map_ind = _build_row_map(ws_ind, name_col=1)
 
@@ -410,7 +410,7 @@ async def main():
 
             # Counts for summary (post-update)
             today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
-            col_ind_y = None
+            col_ind_y = find_date_col(ws_ind, yesterday, 1, 3)
             try:
               col_ind_y = find_date_col(ws_ind, yesterday)
             except RuntimeError:
