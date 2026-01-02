@@ -373,7 +373,7 @@ async def main():
             ws_grp = _ws(TAB_GROUPS)
 
             col_ind_today = find_date_col(ws_ind, today, header_row=1, start_col=3)
-            col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=5)
+            col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=6)
 
             row_map_ind = _build_row_map(ws_ind, name_col=1)
 
