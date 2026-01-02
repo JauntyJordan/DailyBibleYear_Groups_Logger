@@ -135,6 +135,7 @@ def find_date_col(sheet, target_date: date):
     candidates.add(target_date.strftime("%#m/%#d/%Y"))
 
     row_vals = sheet.get("1:1")[0]
+    print("HEADER ROW:", row_vals)
 
     for idx, v in enumerate(row_vals[2:], start=3):
         if v is None:
