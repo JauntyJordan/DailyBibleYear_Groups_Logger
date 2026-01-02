@@ -324,7 +324,7 @@ async def main():
     @client.event
     async def on_ready():
         nonlocal run_url
-      run_start = datetime.now()
+        run_start = datetime.now()
         try:
             channel = await client.fetch_channel(TRACK_CHANNEL_ID)
             status_channel = await client.fetch_channel(STATUS_CHANNEL_ID)
