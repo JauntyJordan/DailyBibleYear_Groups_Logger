@@ -160,13 +160,12 @@ def find_date_col(sheet, target_date: date, header_row: int, start_col: int):
 
 def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
     """Count checked checkboxes (TRUE) in a column, starting at start_row (1-based)."""
-    vals = ws.col_values(col)  # strings like "TRUE"/"FALSE"/"" (not booleans)
-    return sum(
-        1
-        for v in vals[start_row - 1 :]
-        if str(v).replace("\xa0", " ").strip().upper() == "TRUE"
-    )
-
+    vals = ws.col_values(col)
+    n = 0
+    for v in vals[start_row - 1:]:
+        if str(v).replace("\xa0", " ").strip().upper() == "TRUE":
+            n += 1
+    return n
 
 def _load_mappings() -> dict[int, str]:
     """Member Mapping tab:
@@ -428,26 +427,26 @@ async def main():
             end = _now_local()
             duration_s = int((end - start).total_seconds())
 
-          ind_cells = []
+            ind_cells = []
 
-          for user_id, label_norm in mappings.items():
-            has_reacted = user_id in reactors
-            r = row_map_ind.get(label_norm)
-          if not r:
-            continue
-          ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
+            for user_id, label_norm in mappings.items():
+              has_reacted = user_id in reactors
+              r = row_map_ind.get(label_norm)
+            if not r:
+              continue
+            ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
 
-          if not DRY_RUN and ind_cells:
-            ws_ind.update_cells(ind_cells, value_input_option="USER_ENTERED")
+            if not DRY_RUN and ind_cells:
+              ws_ind.update_cells(ind_cells, value_input_option="USER_ENTERED")
 
-          grp_cells = []
+            grp_cells = []
 
-          for g in groups:
-            val = "TRUE" if group_completion.get(g.row, False) else "FALSE"
-            grp_cells.append(Cell(g.row, col_grp_today, val))
+            for g in groups:
+              val = "TRUE" if group_completion.get(g.row, False) else "FALSE"
+              grp_cells.append(Cell(g.row, col_grp_today, val))
 
-          if not DRY_RUN and grp_cells:
-            ws_grp.update_cells(grp_cells, value_input_option="USER_ENTERED")
+            if not DRY_RUN and grp_cells:
+              ws_grp.update_cells(grp_cells, value_input_option="USER_ENTERED")
 
 
 
