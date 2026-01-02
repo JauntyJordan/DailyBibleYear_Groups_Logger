@@ -17,6 +17,7 @@ Notes:
 """
 
 from __future__ import annotations
+from gspread import Cell
 
 import json
 import os
@@ -157,30 +158,15 @@ def find_date_col(sheet, target_date: date, header_row: int, start_col: int):
         f"in row {header_row}, starting col {start_col}"
     )
 
-
-def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
-    if DRY_RUN:
-        print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
-        return
-    ws.update_cell(row, col, value)
-
 def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
     """Count checked checkboxes (TRUE) in a column, starting at start_row (1-based)."""
-    vals = ws.col_values(col)  # returns strings like "TRUE"/"FALSE" or blanks
-    n = 0
+    vals = ws.col_values(col)  # strings like "TRUE"/"FALSE"/"" (not booleans)
+    return sum(
+        1
+        for v in vals[start_row - 1 :]
+        if str(v).replace("\xa0", " ").strip().upper() == "TRUE"
+    )
 
-    for v in vals[start_row - 1:]:
-        if v is True:
-            n += 1
-            continue
-        if v is False or v is None:
-            continue
-
-        text = str(v).replace("\xa0", " ").strip().upper()
-        if text == "TRUE":
-            n += 1
-
-    return n
 
 def _load_mappings() -> dict[int, str]:
     """Member Mapping tab:
@@ -411,7 +397,6 @@ async def main():
                 if not r:
                     skipped_no_row += 1
                     continue
-                _set_checkbox(ws_ind, r, col_ind_today, has_reacted)
                 updated_individuals += 1
                 if has_reacted:
                     reacted_labels_norm.add(label_norm)
@@ -426,7 +411,6 @@ async def main():
             group_completion = _compute_group_completions(groups, reacted_labels_norm)
             updated_groups = 0
             for g in groups:
-                _set_checkbox(ws_grp, g.row, col_grp_today, group_completion.get(g.row, False))
                 updated_groups += 1
 
             # Counts for summary (post-update)
@@ -441,9 +425,31 @@ async def main():
             if col_ind_y is not None:
               yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
 
-
             end = _now_local()
             duration_s = int((end - start).total_seconds())
+
+          ind_cells = []
+
+          for user_id, label_norm in mappings.items():
+            has_reacted = user_id in reactors
+            r = row_map_ind.get(label_norm)
+          if not r:
+            continue
+          ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
+
+          if not DRY_RUN and ind_cells:
+            ws_ind.update_cells(ind_cells, value_input_option="USER_ENTERED")
+
+          grp_cells = []
+
+          for g in groups:
+            val = "TRUE" if group_completion.get(g.row, False) else "FALSE"
+            grp_cells.append(Cell(g.row, col_grp_today, val))
+
+          if not DRY_RUN and grp_cells:
+            ws_grp.update_cells(grp_cells, value_input_option="USER_ENTERED")
+
+
 
             # --- Discord status message ---
             lines = [
