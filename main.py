@@ -430,7 +430,7 @@ async def main():
             if cells and not DRY_RUN:
               ws_grp.update_cells(cells, value_input_option="USER_ENTERED")
 
-            updated_groups = len(groups)
+            updated_groups = _count_true_in_column(ws_grp, col_grp_today, start_row=3)
 
             # Find yesterday column (may not exist on Jan 1)
             col_ind_y = None
