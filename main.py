@@ -191,22 +191,24 @@ def _load_mappings() -> dict[int, str]:
             print(f"[WARN] Skipping mapping with non-integer USER_ID: {uid_raw}")
     return mp
 
-def _build_row_map(ws: gspread.Worksheet, name_col: int = 1) -> dict[str, int]:
-    rows = ws.get_all_values()
+def _build_row_map(ws: gspread.Worksheet, name_col: int = 1, start_row: int = 2) -> dict[str, int]:
+    values = ws.get_all_values()
     m: dict[str, int] = {}
 
-    for idx, r in enumerate(rows, start=1):
+    # start_row=2 skips header row 1
+    for row_idx in range(start_row, len(values) + 1):
+        r = values[row_idx - 1]
         if len(r) < name_col:
             continue
 
-        raw = r[name_col - 1].strip()
+        raw = (r[name_col - 1] or "").strip()
         if not raw:
             continue
 
-        key = _normalize_label(raw)
-        m[key] = idx
+        m[_normalize_label(raw)] = row_idx
 
     return m
+
 
 def _split_roster(roster_cell: str) -> list[str]:
     if not roster_cell:
@@ -432,14 +434,15 @@ async def main():
             for user_id, label_norm in mappings.items():
               has_reacted = user_id in reactors
               r = row_map_ind.get(label_norm)
-            if not r:
-              continue
-            ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
+              if not r:
+                continue
+              has_reacted = user_id in reactors
+              ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
 
             if not DRY_RUN and ind_cells:
               ws_ind.update_cells(ind_cells, value_input_option="USER_ENTERED")
 
-            grp_cells = []
+            grp_cells: list[Cell] = []
 
             for g in groups:
               val = "TRUE" if group_completion.get(g.row, False) else "FALSE"
