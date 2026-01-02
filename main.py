@@ -256,6 +256,12 @@ def _message_matches_daily_post(msg: discord.Message, today: date) -> bool:
         if emb.description:
             haystacks.append(str(emb.description).lower())
 
+    print("[DEBUG] Checking message:", msg.id)
+    print("  author:", msg.author.id)
+    print("  created:", created_local)
+    print("  content:", msg.content)
+    print("  embeds:", [(e.title, e.description) for e in msg.embeds])
+  
     return any(TITLE_MATCH in h for h in haystacks)
 
 
