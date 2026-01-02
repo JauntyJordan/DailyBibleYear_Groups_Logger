@@ -163,9 +163,13 @@ def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -
     vals = ws.col_values(col)
     n = 0
     for v in vals[start_row - 1:]:
+        if v is True:
+            n += 1
+            continue
         if str(v).replace("\xa0", " ").strip().upper() == "TRUE":
             n += 1
     return n
+
 
 def _load_mappings() -> dict[int, str]:
     """Member Mapping tab:
@@ -414,14 +418,6 @@ async def main():
             for g in groups:
                 updated_groups += 1
 
-            # Counts for summary (post-update)
-            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
-            col_ind_y = None
-            try:
-              col_ind_y = find_date_col(ws_ind, yesterday, header_row=1, start_col=3)
-            except RuntimeError:
-              pass
-
             yesterday_marked = None
             if col_ind_y is not None:
               yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
@@ -450,6 +446,14 @@ async def main():
 
             if not DRY_RUN and grp_cells:
               ws_grp.update_cells(grp_cells, value_input_option="USER_ENTERED")
+
+            # Counts for summary (post-update)
+            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
+            col_ind_y = None
+            try:
+              col_ind_y = find_date_col(ws_ind, yesterday, header_row=1, start_col=3)
+            except RuntimeError:
+              pass
 
 
 
