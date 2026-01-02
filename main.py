@@ -116,7 +116,7 @@ def _normalize_label(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.upper()
 
-def find_date_col(sheet, target_date: date):
+def find_date_col(sheet, target_date: date, header_rows=(1,)):
     """
     Returns 1-based column index where the header matches target_date.
     Assumes date headers are on row 1, starting at column C.
@@ -135,9 +135,13 @@ def find_date_col(sheet, target_date: date):
     candidates.add(target_date.strftime("%#m/%#d/%Y"))
 
     row_vals = sheet.get("1:1")[0]
-    print("HEADER ROW:", row_vals)
+    
 
-    for idx, v in enumerate(row_vals[2:], start=3):
+    for r in header_rows:
+      row_vals = sheet.get(f"{r}:{r}")[0]
+      print("HEADER ROW:", row_vals)
+      
+      for idx, v in enumerate(row_vals[2:], start=3):
         if v is None:
             continue
 
