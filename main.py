@@ -324,6 +324,7 @@ async def main():
     @client.event
     async def on_ready():
         nonlocal run_url
+      run_start = datetime.now()
         try:
             channel = await client.fetch_channel(TRACK_CHANNEL_ID)
             status_channel = await client.fetch_channel(STATUS_CHANNEL_ID)
@@ -441,8 +442,10 @@ async def main():
             yesterday_marked = None
             if col_ind_y is not None:
               yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
+            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
 
             # --- Discord status message ---
+            duration_s = round((datetime.now() - run_start).total_seconds(), 2)
             lines = [
                 "✅ Bible In A Year update completed",
                 f"• Check: {CHECK_NAME}",
