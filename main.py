@@ -160,16 +160,8 @@ def find_date_col(sheet, target_date: date, header_row: int, start_col: int):
 
 def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
     """Count checked checkboxes (TRUE) in a column, starting at start_row (1-based)."""
-    vals = ws.col_values(col)
-    n = 0
-    for v in vals[start_row - 1:]:
-        if v is True:
-            n += 1
-            continue
-        if str(v).replace("\xa0", " ").strip().upper() == "TRUE":
-            n += 1
-    return n
-
+    vals = ws.col_values(col)[start_row - 1 :]
+    return sum(1 for v in vals if str(v).replace("\xa0", " ").strip().upper() == "TRUE")
 
 def _load_mappings() -> dict[int, str]:
     """Member Mapping tab:
@@ -414,48 +406,18 @@ async def main():
             # Groups recompute
             groups = _load_groups()
             group_completion = _compute_group_completions(groups, reacted_labels_norm)
-            updated_groups = 0
-            for g in groups:
-                updated_groups += 1
+            updated_groups = len(groups)
 
-            yesterday_marked = None
-            if col_ind_y is not None:
-              yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
-
-            end = _now_local()
-            duration_s = int((end - start).total_seconds())
-
-            ind_cells = []
-
-            for user_id, label_norm in mappings.items():
-              has_reacted = user_id in reactors
-              r = row_map_ind.get(label_norm)
-              if not r:
-                continue
-              has_reacted = user_id in reactors
-              ind_cells.append(Cell(r, col_ind_today, "TRUE" if has_reacted else "FALSE"))
-
-            if not DRY_RUN and ind_cells:
-              ws_ind.update_cells(ind_cells, value_input_option="USER_ENTERED")
-
-            grp_cells: list[Cell] = []
-
-            for g in groups:
-              val = "TRUE" if group_completion.get(g.row, False) else "FALSE"
-              grp_cells.append(Cell(g.row, col_grp_today, val))
-
-            if not DRY_RUN and grp_cells:
-              ws_grp.update_cells(grp_cells, value_input_option="USER_ENTERED")
-
-            # Counts for summary (post-update)
-            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
+            # Find yesterday column (may not exist on Jan 1)
             col_ind_y = None
             try:
               col_ind_y = find_date_col(ws_ind, yesterday, header_row=1, start_col=3)
             except RuntimeError:
-              pass
+              col_ind_y = None
 
-
+            yesterday_marked = None
+            if col_ind_y is not None:
+              yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
 
             # --- Discord status message ---
             lines = [
