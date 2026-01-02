@@ -116,41 +116,46 @@ def _normalize_label(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.upper()
 
-def find_date_col(sheet, target_date: date, header_rows=(1, 2, 3)):
+def find_date_col(sheet, target_date: date):
     """
     Returns 1-based column index where the header matches target_date.
-    Searches multiple header rows and multiple formats (including sheet display values).
+    Assumes date headers are on row 1, starting at column C.
     """
-    # Formats to try against header text
+
     candidates = {
         target_date.isoformat(),                  # 2026-01-01
-        target_date.strftime("%-m/%-d/%y"),        # 1/1/26  (mac/linux)
+        target_date.strftime("%-m/%-d/%y"),        # 1/1/26 (mac/linux)
         target_date.strftime("%m/%d/%y"),          # 01/01/26
         target_date.strftime("%-m/%-d/%Y"),        # 1/1/2026
         target_date.strftime("%m/%d/%Y"),          # 01/01/2026
     }
 
-    # Windows compatibility for %-m / %-d (if you ever run locally on Windows)
+    # Windows compatibility
     candidates.add(target_date.strftime("%#m/%#d/%y"))
     candidates.add(target_date.strftime("%#m/%#d/%Y"))
 
-    for r in header_rows:
-        row_vals = sheet.get(f"{r}:{r}")[0]
-        for idx, v in enumerate(row_vals[2:], start=3):
-            if v.strip() in candidates:
-                return idx
+    row_vals = sheet.get("1:1")[0]
 
-            # Also try parsing whatever is in the cell as a date
+    for idx, v in enumerate(row_vals[2:], start=3):
+        if v is None:
+            continue
+
+        text = str(v).strip()
+
+        if text in candidates:
+            return idx
+
+        # Try parsing common date formats
+        for fmt in ("%m/%d/%y", "%m/%d/%Y"):
             try:
-                parsed = datetime.strptime(v.strip(), "%m/%d/%y").date()
-                if parsed == target_date:
+                if datetime.strptime(text, fmt).date() == target_date:
                     return idx
-            except Exception:
+            except ValueError:
                 pass
 
     raise RuntimeError(
         f"Date column not found for {target_date.isoformat()}. "
-        f"Checked rows {header_rows} with formats: {sorted(candidates)}"
+        f"Checked row 1 with formats: {sorted(candidates)}"
     )
 
 def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
