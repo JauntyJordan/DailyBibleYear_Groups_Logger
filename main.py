@@ -93,6 +93,15 @@ print("Workbook ID:", workbook.id)
 print("Workbook URL:", workbook.url)
 print("Worksheets:", [ws.title for ws in workbook.worksheets()])
 
+print(
+    "SETTING CHECKBOX",
+    "row=", row,
+    "col=", col_today,
+    "value=", value,
+    "type=", type(value)
+)
+
+
 def _ws(name: str) -> gspread.Worksheet:
     return workbook.worksheet(name)
 
