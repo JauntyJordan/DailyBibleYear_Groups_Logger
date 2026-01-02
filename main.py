@@ -164,17 +164,23 @@ def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
         return
     ws.update_cell(row, col, value)
 
-
 def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
-    """Count TRUE values in a given column, excluding header row."""
-    # Fetch whole column once for speed
-    vals = ws.col_values(col)
+    """Count checked checkboxes (TRUE) in a column, starting at start_row (1-based)."""
+    vals = ws.col_values(col)  # returns strings like "TRUE"/"FALSE" or blanks
     n = 0
-    for v in vals[start_row - 1 :]:
-        if str(v).strip().upper() == "TRUE":
-            n += 1
-    return n
 
+    for v in vals[start_row - 1:]:
+        if v is True:
+            n += 1
+            continue
+        if v is False or v is None:
+            continue
+
+        text = str(v).replace("\xa0", " ").strip().upper()
+        if text == "TRUE":
+            n += 1
+
+    return n
 
 def _load_mappings() -> dict[int, str]:
     """Member Mapping tab:
@@ -376,7 +382,7 @@ async def main():
             print("Reactor IDs:", sorted(list(reactors))[:20], "… total:", len(reactors))
 
             # If you know your Discord user ID, hardcode it temporarily:
-            MY_ID = 123456789012345678  # <-- replace with your ID
+            MY_ID = 164552034320777216  # <-- replace with your ID
             print("Did MY_ID react?", MY_ID in reactors)
 
             if MY_ID in mappings:
