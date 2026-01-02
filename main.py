@@ -141,11 +141,22 @@ def find_date_col(sheet, target_date: date, header_rows=(1,)):
       row_vals = sheet.get(f"{r}:{r}")[0]
       print("HEADER ROW:", row_vals)
       
-      for idx, v in enumerate(row_vals[2:], start=3):
-        if v is None:
+      for idx, v in enumerate(row_vals, start=1):
+        if not v:
             continue
 
         text = str(v).replace("\xa0", " ").strip()
+
+        if text.lower() in {
+          "groups",
+          "dates",
+          "current streak 🔥",
+          "longest streak",
+          "false",
+          "finished",
+      }:
+          continue
+
 
         if text in candidates:
             return idx
