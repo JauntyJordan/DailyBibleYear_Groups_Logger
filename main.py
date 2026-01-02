@@ -119,60 +119,42 @@ def _normalize_label(s: str) -> str:
 def find_date_col(sheet, target_date: date, header_rows=(1,)):
     """
     Returns 1-based column index where the header matches target_date.
-    Assumes date headers are on row 1, starting at column C.
+    Assumes date headers are actual dates formatted as m/d/yy or m/d/yyyy.
     """
 
-    candidates = {
-        target_date.isoformat(),                  # 2026-01-01
-        target_date.strftime("%-m/%-d/%y"),        # 1/1/26 (mac/linux)
-        target_date.strftime("%m/%d/%y"),          # 01/01/26
-        target_date.strftime("%-m/%-d/%Y"),        # 1/1/2026
-        target_date.strftime("%m/%d/%Y"),          # 01/01/2026
-    }
-
-    # Windows compatibility
-    candidates.add(target_date.strftime("%#m/%#d/%y"))
-    candidates.add(target_date.strftime("%#m/%#d/%Y"))
-
-    row_vals = sheet.get("1:1")[0]
-    
-
     for r in header_rows:
-      row_vals = sheet.get(f"{r}:{r}")[0]
-      print("HEADER ROW:", row_vals)
-      
-      for idx, v in enumerate(row_vals, start=1):
-        if not v:
-            continue
+        row_vals = sheet.get(f"{r}:{r}")[0]
+        print("HEADER ROW:", row_vals)
 
-        text = str(v).replace("\xa0", " ").strip()
+        for idx, v in enumerate(row_vals, start=1):
+            if not v:
+                continue
 
-        if text.lower() in {
-          "groups",
-          "dates",
-          "current streak 🔥",
-          "longest streak",
-          "false",
-          "finished",
-      }:
-          continue
+            text = str(v).replace("\xa0", " ").strip()
 
+            # Skip non-date headers
+            if text.lower() in {
+                "groups",
+                "dates",
+                "current streak 🔥",
+                "longest streak",
+                "false",
+                "finished",
+            }:
+                continue
 
-        if text in candidates:
-            return idx
-
-        # Try parsing common date formats
-        for fmt in ("%m/%d/%y", "%m/%d/%Y"):
-            try:
-                if datetime.strptime(text, fmt).date() == target_date:
-                    return idx
-            except ValueError:
-                pass
+            # Parse date directly
+            for fmt in ("%m/%d/%y", "%m/%d/%Y"):
+                try:
+                    if datetime.strptime(text, fmt).date() == target_date:
+                        return idx
+                except ValueError:
+                    continue
 
     raise RuntimeError(
-        f"Date column not found for {target_date.isoformat()}. "
-        f"Checked row 1 with formats: {sorted(candidates)}"
+        f"Date column not found for {target_date.isoformat()} in rows {header_rows}"
     )
+
 
 def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
     if DRY_RUN:
