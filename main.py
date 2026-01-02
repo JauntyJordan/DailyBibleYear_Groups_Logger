@@ -377,6 +377,25 @@ async def main():
 
             row_map_ind = _build_row_map(ws_ind, name_col=1)
 
+            print("Reactor IDs:", sorted(list(reactors))[:20], "… total:", len(reactors))
+
+            # If you know your Discord user ID, hardcode it temporarily:
+            MY_ID = 123456789012345678  # <-- replace with your ID
+            print("Did MY_ID react?", MY_ID in reactors)
+
+            if MY_ID in mappings:
+              print("MY_ID mapping label:", mappings[MY_ID])
+              print("Row for MY_ID label:", row_map_ind.get(mappings[MY_ID]))
+            else:
+              print("MY_ID is NOT in Member Mapping")
+
+            # Also print when a mapped user doesn't resolve to a row:
+            for user_id, label_norm in mappings.items():
+              r = row_map_ind.get(label_norm)
+              if r is None:
+                print("[NO ROW MATCH]", user_id, label_norm)
+
+
 
             # Build a set of normalized sheet labels that reacted
             reacted_labels_norm: set[str] = set()
