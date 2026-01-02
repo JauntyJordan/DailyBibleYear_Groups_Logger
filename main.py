@@ -162,7 +162,7 @@ def _set_checkbox(ws: gspread.Worksheet, row: int, col: int, value: bool):
     if DRY_RUN:
         print(f"[DRY_RUN] set {ws.title} R{row}C{col} = {value}")
         return
-    ws.update_cell(row, col, "TRUE" if value else "FALSE")
+    ws.update_cell(row, col, value)
 
 
 def _count_true_in_column(ws: gspread.Worksheet, col: int, start_row: int = 2) -> int:
@@ -212,10 +212,6 @@ def _build_row_map(ws: gspread.Worksheet, name_col: int = 1) -> dict[str, int]:
         if not raw:
             continue
 
-        # Skip section headers
-        if raw.isupper():
-            continue
-
         key = _normalize_label(raw)
         m[key] = idx
 
@@ -243,7 +239,7 @@ def _load_groups() -> list[Group]:
     ws = _ws(TAB_GROUPS)
     values = ws.get_all_values()
     out: list[Group] = []
-    for i, r in enumerate(values[1:], start=2):  # skip header row
+    for i, r in enumerate(values[2:], start=3):  # skip header row
         group_label = (r[0] or "").strip() if len(r) > 0 else ""
         roster = (r[1] or "").strip() if len(r) > 1 else ""
         if not group_label:
