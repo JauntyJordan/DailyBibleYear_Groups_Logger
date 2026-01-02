@@ -398,6 +398,20 @@ async def main():
                 if has_reacted:
                     reacted_labels_norm.add(label_norm)
 
+            cells = []
+
+            for user_id, label_norm in mappings.items():
+              r = row_map_ind.get(label_norm)
+              if not r:
+                continue
+
+              value = "TRUE" if user_id in reactors else "FALSE"
+              cells.append(Cell(row=r, col=col_ind_today, value=value))
+
+            if cells and not DRY_RUN:
+              ws_ind.update_cells(cells, value_input_option="USER_ENTERED")
+
+
             # If there are reactors who aren't mapped, count them for visibility
             for uid in reactors:
                 if uid not in mappings:
@@ -406,6 +420,15 @@ async def main():
             # Groups recompute
             groups = _load_groups()
             group_completion = _compute_group_completions(groups, reacted_labels_norm)
+            cells = []
+
+            for row_idx, completed in group_completion.items():
+              value = "TRUE" if completed else "FALSE"
+              cells.append(Cell(row=row_idx, col=col_grp_today, value=value))
+
+            if cells and not DRY_RUN:
+              ws_grp.update_cells(cells, value_input_option="USER_ENTERED")
+
             updated_groups = len(groups)
 
             # Find yesterday column (may not exist on Jan 1)
