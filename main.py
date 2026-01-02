@@ -145,7 +145,7 @@ def find_date_col(sheet, target_date: date, header_rows=(1,)):
         if v is None:
             continue
 
-        text = str(v).strip()
+        text = str(v).replace("\xa0", " ").strip()
 
         if text in candidates:
             return idx
@@ -205,23 +205,24 @@ def _load_mappings() -> dict[int, str]:
             print(f"[WARN] Skipping mapping with non-integer USER_ID: {uid_raw}")
     return mp
 
-def _build_row_map(ws: gspread.Worksheet) -> dict[str, int]:
+def _build_row_map(ws: gspread.Worksheet, name_col: int = 1) -> dict[str, int]:
     rows = ws.get_all_values()
     m: dict[str, int] = {}
 
     for idx, r in enumerate(rows, start=1):
-        if not r or not r[0]:
+        if len(r) < name_col:
             continue
 
-        raw = r[0].strip()
+        raw = r[name_col - 1].strip()
+        if not raw:
+            continue
 
-        # Skip section headers (ALL CAPS, no spaces like names)
+        # Skip section headers
         if raw.isupper():
             continue
 
         key = _normalize_label(raw)
-        if key:
-            m[key] = idx
+        m[key] = idx
 
     return m
 
@@ -379,7 +380,8 @@ async def main():
             col_ind_today = find_date_col(ws_ind, today)
             col_grp_today = find_date_col(ws_grp, today)
 
-            row_map_ind = _build_row_map(ws_ind)
+            row_map_ind = _build_row_map(ws_ind, name_col=1)
+
 
             # Build a set of normalized sheet labels that reacted
             reacted_labels_norm: set[str] = set()
