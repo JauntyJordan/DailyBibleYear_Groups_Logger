@@ -366,110 +366,85 @@ async def main():
             ws_ind = _ws(TAB_INDIVIDUALS)
             ws_grp = _ws(TAB_GROUPS)
 
-            #col_ind_today = find_date_col(ws_ind, today, header_row=1, start_col=3)
-            #col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=5)
+            row_map_ind = _build_row_map(ws_ind, name_col=1)
 
-            for target_date in target_dates:
-              col_ind = find_date_col(ws_ind, target_date, header_row=1, start_col=3)
-              col_grp = find_date_col(ws_grp, target_date, header_row=2, start_col=5)
+            # Totals for the status message (across both dates)
+            total_individual_cells_written = 0
+            total_groups_true = 0
+            total_reactors_found = 0
+            skipped_unmapped = 0
+            skipped_no_row = 0
 
-              if not col_ind or not col_grp:
-                print(f"[WARN] No column found for {target_date}")
-                continue
+            today = _today_local()
+            yesterday = _yesterday_local()
 
-              # ✅ Existing Individuals logic (unchanged)
-              # write TRUE/FALSE based on reactions
-
-              # ✅ Existing Groups logic (unchanged)
-              # write TRUE only if all members reacted
-
-          
-
-              row_map_ind = _build_row_map(ws_ind, name_col=1)
-
-              print("Reactor IDs:", sorted(list(reactors))[:20], "… total:", len(reactors))
-
-              # If you know your Discord user ID, hardcode it temporarily:
-              MY_ID = 164552034320777216  # <-- replace with your ID
-              print("Did MY_ID react?", MY_ID in reactors)
-
-              if MY_ID in mappings:
-                print("MY_ID mapping label:", mappings[MY_ID])
-                print("Row for MY_ID label:", row_map_ind.get(mappings[MY_ID]))
-              else:
-                print("MY_ID is NOT in Member Mapping")
-
-              # Also print when a mapped user doesn't resolve to a row:
-              for user_id, label_norm in mappings.items():
-                r = row_map_ind.get(label_norm)
-                if r is None:
-                  print("[NO ROW MATCH]", user_id, label_norm)
-
-
-
-              # Build a set of normalized sheet labels that reacted
-              reacted_labels_norm: set[str] = set()
-              updated_individuals = 0
-              skipped_unmapped = 0
-              skipped_no_row = 0
-
-              for user_id, label_norm in mappings.items():
-                has_reacted = user_id in reactors
-                r = row_map_ind.get(label_norm)
-                if not r:
-                    skipped_no_row += 1
-                    continue
-                updated_individuals += 1
-                if has_reacted:
-                    reacted_labels_norm.add(label_norm)
-
-              cells = []
-              updated_individuals = 0
-              reacted_labels_norm = set()
-
-              for user_id, label_norm in mappings.items():
-                r = row_map_ind.get(label_norm)
-                if not r:
-                  skipped_no_row += 1
-                  continue
-                has_reacted = user_id in reactors
-                value = "TRUE" if user_id in reactors else "FALSE"
-              cells.append(Cell(row=r, col=col_ind_today, value=value))
-
-              if cells and not DRY_RUN:
-                ws_ind.update_cells(cells, value_input_option="USER_ENTERED")
-
-
-            # If there are reactors who aren't mapped, count them for visibility
-            for uid in reactors:
-                if uid not in mappings:
-                    skipped_unmapped += 1
-
-            # Groups recompute
-            groups = _load_groups()
-            group_completion = _compute_group_completions(groups, reacted_labels_norm)
-            cells = []
-
-            for row_idx, completed in group_completion.items():
-              value = "TRUE" if completed else "FALSE"
-              cells.append(Cell(row=row_idx, col=col_grp_today, value=value))
-
-            if cells and not DRY_RUN:
-              ws_grp.update_cells(cells, value_input_option="USER_ENTERED")
-
-            updated_groups = _count_true_in_column(ws_grp, col_grp_today, start_row=3)
-
-            # Find yesterday column (may not exist on Jan 1)
-            col_ind_y = None
-            try:
-              col_ind_y = find_date_col(ws_ind, yesterday, header_row=1, start_col=3)
-            except RuntimeError:
-              col_ind_y = None
-
+            # We will compute these after writing for the corresponding columns
+            today_marked = 0
             yesterday_marked = None
-            if col_ind_y is not None:
-              yesterday_marked = _count_true_in_column(ws_ind, col_ind_y, start_row=2)
-            today_marked = _count_true_in_column(ws_ind, col_ind_today, start_row=2)
+
+            for target_date in [today, yesterday]:
+                # 1) find the correct post for that date
+                msg_for_day = await _find_todays_post(channel, target_date)
+                if not msg_for_day:
+                    print(f"[WARN] Could not find target post for {target_date.isoformat()}; skipping sheet update for this date.")
+                    continue
+
+                reactors = await _get_reactors_for_emoji(msg_for_day)
+                total_reactors_found += len(reactors)
+
+                # 2) find date columns
+                col_ind = find_date_col(ws_ind, target_date, header_row=1, start_col=3)
+                col_grp = find_date_col(ws_grp, target_date, header_row=2, start_col=5)
+
+                # 3) Individuals: write TRUE/FALSE for everyone in Member Mapping
+                reacted_labels_norm: set[str] = set()
+                cells_ind: list[Cell] = []
+
+                for user_id, label_norm in mappings.items():
+                    r = row_map_ind.get(label_norm)
+                    if not r:
+                        skipped_no_row += 1
+                        continue
+
+                    has_reacted = user_id in reactors
+                    if has_reacted:
+                        reacted_labels_norm.add(label_norm)
+
+                    value = "TRUE" if has_reacted else "FALSE"
+                    cells_ind.append(Cell(row=r, col=col_ind, value=value))
+
+                if cells_ind and not DRY_RUN:
+                    ws_ind.update_cells(cells_ind, value_input_option="USER_ENTERED")
+
+                total_individual_cells_written += len(cells_ind)
+
+                # Count reactors that have no mapping (visibility)
+                for uid in reactors:
+                    if uid not in mappings:
+                        skipped_unmapped += 1
+
+                # 4) Groups: TRUE only if every roster member reacted
+                groups = _load_groups()
+                group_completion = _compute_group_completions(groups, reacted_labels_norm)
+
+                cells_grp: list[Cell] = []
+                for row_idx, completed in group_completion.items():
+                    value = "TRUE" if completed else "FALSE"
+                    cells_grp.append(Cell(row=row_idx, col=col_grp, value=value))
+
+                if cells_grp and not DRY_RUN:
+                    ws_grp.update_cells(cells_grp, value_input_option="USER_ENTERED")
+
+                # number of groups that are TRUE for this date column
+                groups_true_for_day = _count_true_in_column(ws_grp, col_grp, start_row=3)
+                total_groups_true += groups_true_for_day
+
+                # 5) Marked counts for status
+                if target_date == today:
+                    today_marked = _count_true_in_column(ws_ind, col_ind, start_row=2)
+                elif target_date == yesterday:
+                    yesterday_marked = _count_true_in_column(ws_ind, col_ind, start_row=2)
+
 
             # --- Discord status message ---
             duration_s = round((datetime.now() - run_start).total_seconds(), 2)
