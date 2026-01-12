@@ -408,8 +408,16 @@ async def main():
                 col_grp = find_date_col(ws_grp, target_date, header_row=2, start_col=5)
 
                 # 3) Individuals: write TRUE/FALSE for everyone in Member Mapping
+                groups = _load_groups()
+                group_completion = _compute_group_completions(groups, reacted_labels_norm)
                 reacted_labels_norm: set[str] = set()
                 cells_ind: list[Cell] = []
+
+                cells_grp = []
+                for row_idc, completed in group_completion.items():
+                    value = "TRUE" if completed else "FALSE"
+                    cells_grp.append(Cell(row=row_idx, col=col_grp, value=value))
+                ws_grp.update_cells(cells_grp, value_input_option="USER_ENTERED")
 
                 for user_id, label_norm in mappings.items():
                     r = row_map_ind.get(label_norm)
@@ -424,7 +432,6 @@ async def main():
                     value = "TRUE" if has_reacted else "FALSE"
                     cells_ind.append(Cell(row=r, col=col_ind, value=value))
                 if write_individuals:
-                  if cells_ind and not DRY_RUN:
                     ws_ind.update_cells(cells_ind, value_input_option="USER_ENTERED")
                   
 
