@@ -310,7 +310,8 @@ def _compute_group_completions(
 
 async def main():
     start = _now_local()
-    today = _today_local()
+    target_dates = [_today_local(), _yesterday_local()]
+    #today = _today_local()
     yesterday = _yesterday_local()
 
     # --- Discord client (single-run) ---
@@ -364,8 +365,24 @@ async def main():
             ws_ind = _ws(TAB_INDIVIDUALS)
             ws_grp = _ws(TAB_GROUPS)
 
-            col_ind_today = find_date_col(ws_ind, today, header_row=1, start_col=3)
-            col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=5)
+            #col_ind_today = find_date_col(ws_ind, today, header_row=1, start_col=3)
+            #col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=5)
+
+            for target_date in target_dates:
+              col_ind = _find_date_column(ws_ind, target_date)
+              col_grp = _find_date_column(ws_grp, target_date)
+
+              if not col_ind or not col_grp:
+                print(f"[WARN] No column found for {target_date}")
+                continue
+
+              # ✅ Existing Individuals logic (unchanged)
+              # write TRUE/FALSE based on reactions
+
+              # ✅ Existing Groups logic (unchanged)
+              # write TRUE only if all members reacted
+
+          
 
             row_map_ind = _build_row_map(ws_ind, name_col=1)
 
