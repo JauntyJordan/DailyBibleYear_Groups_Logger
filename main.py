@@ -330,6 +330,7 @@ async def main():
 
     @client.event
     async def on_ready():
+        today = _today_local()
         nonlocal run_url
         run_start = datetime.now()
         try:
@@ -369,8 +370,10 @@ async def main():
             #col_grp_today = find_date_col(ws_grp, today, header_row=2, start_col=5)
 
             for target_date in target_dates:
-              col_ind = _find_date_column(ws_ind, target_date)
-              col_grp = _find_date_column(ws_grp, target_date)
+              col_ind_today = col_ind
+              col_grp_today = col_grp
+              col_ind = _find_date_col(ws_ind, target_date, header_row=1, start_col=3)
+              col_grp = _find_date_col(ws_grp, target_date, header_row=2, start_col=5)
 
               if not col_ind or not col_grp:
                 print(f"[WARN] No column found for {target_date}")
@@ -384,35 +387,35 @@ async def main():
 
           
 
-            row_map_ind = _build_row_map(ws_ind, name_col=1)
+              row_map_ind = _build_row_map(ws_ind, name_col=1)
 
-            print("Reactor IDs:", sorted(list(reactors))[:20], "… total:", len(reactors))
+              print("Reactor IDs:", sorted(list(reactors))[:20], "… total:", len(reactors))
 
-            # If you know your Discord user ID, hardcode it temporarily:
-            MY_ID = 164552034320777216  # <-- replace with your ID
-            print("Did MY_ID react?", MY_ID in reactors)
+              # If you know your Discord user ID, hardcode it temporarily:
+              MY_ID = 164552034320777216  # <-- replace with your ID
+              print("Did MY_ID react?", MY_ID in reactors)
 
-            if MY_ID in mappings:
-              print("MY_ID mapping label:", mappings[MY_ID])
-              print("Row for MY_ID label:", row_map_ind.get(mappings[MY_ID]))
-            else:
-              print("MY_ID is NOT in Member Mapping")
+              if MY_ID in mappings:
+                print("MY_ID mapping label:", mappings[MY_ID])
+                print("Row for MY_ID label:", row_map_ind.get(mappings[MY_ID]))
+              else:
+                print("MY_ID is NOT in Member Mapping")
 
-            # Also print when a mapped user doesn't resolve to a row:
-            for user_id, label_norm in mappings.items():
-              r = row_map_ind.get(label_norm)
-              if r is None:
-                print("[NO ROW MATCH]", user_id, label_norm)
+              # Also print when a mapped user doesn't resolve to a row:
+              for user_id, label_norm in mappings.items():
+                r = row_map_ind.get(label_norm)
+                if r is None:
+                  print("[NO ROW MATCH]", user_id, label_norm)
 
 
 
-            # Build a set of normalized sheet labels that reacted
-            reacted_labels_norm: set[str] = set()
-            updated_individuals = 0
-            skipped_unmapped = 0
-            skipped_no_row = 0
+              # Build a set of normalized sheet labels that reacted
+              reacted_labels_norm: set[str] = set()
+              updated_individuals = 0
+              skipped_unmapped = 0
+              skipped_no_row = 0
 
-            for user_id, label_norm in mappings.items():
+              for user_id, label_norm in mappings.items():
                 has_reacted = user_id in reactors
                 r = row_map_ind.get(label_norm)
                 if not r:
@@ -422,18 +425,18 @@ async def main():
                 if has_reacted:
                     reacted_labels_norm.add(label_norm)
 
-            cells = []
+              cells = []
 
-            for user_id, label_norm in mappings.items():
-              r = row_map_ind.get(label_norm)
-              if not r:
-                continue
+              for user_id, label_norm in mappings.items():
+                r = row_map_ind.get(label_norm)
+                if not r:
+                  continue
 
               value = "TRUE" if user_id in reactors else "FALSE"
               cells.append(Cell(row=r, col=col_ind_today, value=value))
 
-            if cells and not DRY_RUN:
-              ws_ind.update_cells(cells, value_input_option="USER_ENTERED")
+              if cells and not DRY_RUN:
+                ws_ind.update_cells(cells, value_input_option="USER_ENTERED")
 
 
             # If there are reactors who aren't mapped, count them for visibility
