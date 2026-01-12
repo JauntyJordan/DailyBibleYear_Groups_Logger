@@ -382,7 +382,15 @@ async def main():
             today_marked = 0
             yesterday_marked = None
 
-            for target_date in [today, yesterday]:
+            # TEMP: backfill Groups tab for the past N days (set env BACKFILL_GROUPS_DAYS=11, then remove later)
+            BACKFILL_GROUPS_DAYS = int(os.getenv("BACKFILL_GROUPS_DAYS", "0"))
+
+            date_list = [today, yesterday] if BACKFILL_GROUPS_DAYS <= 0 else [
+              today - timedelta(days=i) for i in range(BACKFILL_GROUPS_DAYS)
+            ]
+
+
+            for target_date in date_list:
                 # 1) find the correct post for that date
                 msg_for_day = await _find_todays_post(channel, target_date)
                 if not msg_for_day:
@@ -390,6 +398,7 @@ async def main():
                     continue
 
                 reactors = await _get_reactors_for_emoji(msg_for_day)
+                write_individuals = (BACKFILL_GROUPS_DAYS <= 0)  # backfill mode = groups-only
                 total_reactors_found += len(reactors)
 
                 # 2) find date columns
@@ -412,9 +421,10 @@ async def main():
 
                     value = "TRUE" if has_reacted else "FALSE"
                     cells_ind.append(Cell(row=r, col=col_ind, value=value))
-
-                if cells_ind and not DRY_RUN:
+                if write_individuals:
+                  if cells_ind and not DRY_RUN:
                     ws_ind.update_cells(cells_ind, value_input_option="USER_ENTERED")
+                  
 
                 total_individual_cells_written += len(cells_ind)
 
