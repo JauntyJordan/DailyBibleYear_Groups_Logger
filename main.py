@@ -374,6 +374,8 @@ async def main():
             total_reactors_found = 0
             skipped_unmapped = 0
             skipped_no_row = 0
+            updated_individuals_true = 0
+            updated_groups_true = 0
 
             today = _today_local()
             yesterday = _yesterday_local()
@@ -447,13 +449,16 @@ async def main():
 
                 # number of groups that are TRUE for this date column
                 groups_true_for_day = _count_true_in_column(ws_grp, col_grp, start_row=3)
+                updated_groups_true += groups_true_for_day
                 total_groups_true += groups_true_for_day
 
                 # 5) Marked counts for status
                 if target_date == today:
                     today_marked = _count_true_in_column(ws_ind, col_ind, start_row=2)
+                    updated_individuals_true += today_marked
                 elif target_date == yesterday:
                     yesterday_marked = _count_true_in_column(ws_ind, col_ind, start_row=2)
+                    updated_individuals_true += (yesterday_marked or 0)
 
 
             # --- Discord status message ---
