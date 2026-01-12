@@ -1,6 +1,19 @@
 name: Bible In A Year – Groups Logger
 
 on:
+  schedule:
+    # ~2:00 PM Los Angeles time (cover PDT/PST)
+    - cron: '0 21 * * *'   # 2:00 PM PDT (UTC-7)
+    - cron: '0 22 * * *'   # 2:00 PM PST (UTC-8)
+
+    # ~7:00 PM Los Angeles time
+    - cron: '0 2 * * *'    # 7:00 PM PDT (02:00 UTC next day)
+    - cron: '0 3 * * *'    # 7:00 PM PST (03:00 UTC next day)
+
+    # ~11:20 PM Los Angeles time
+    - cron: '20 6 * * *'   # 11:20 PM PDT (06:20 UTC next day)
+    - cron: '20 7 * * *'   # 11:20 PM PST (07:20 UTC next day)
+
   workflow_dispatch:
 
 jobs:
